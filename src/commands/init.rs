@@ -5,6 +5,9 @@ use std::path::Path;
 
 use crate::services::config::ServicesConfig;
 
+const DEFAULT_SERVICES_TOML: &str =
+    include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/services.toml.example"));
+
 pub fn run(state_dir: &Path) -> anyhow::Result<()> {
     let path = ServicesConfig::toml_path(state_dir);
 
@@ -13,13 +16,8 @@ pub fn run(state_dir: &Path) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let example = state_dir.join("services.toml.example");
-    if !example.exists() {
-        anyhow::bail!("services.toml.example not found at {}", example.display());
-    }
-
-    std::fs::copy(&example, &path)?;
-    println!("  Created {} from example", path.display());
+    std::fs::write(&path, DEFAULT_SERVICES_TOML)?;
+    println!("  Created {} from built-in template", path.display());
     println!();
     println!("  Edit it to set absolute paths and API key env variables:");
     println!("    {}", path.display());
