@@ -97,7 +97,7 @@ fn init_idempotent_when_exists() {
 }
 
 #[test]
-fn init_succeeds_without_services_toml_example_file() {
+fn init_without_example_file() {
     let dir = tempfile::tempdir().unwrap();
     assert!(!dir.path().join("services.toml.example").exists());
 

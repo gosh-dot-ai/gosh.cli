@@ -149,8 +149,6 @@ fn extract_port(endpoint: &str) -> Option<u16> {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-
     use crate::context::AppContext;
     use crate::services::config::ServicesConfig;
     use crate::stores::secret::SecretStore;
@@ -158,29 +156,25 @@ mod tests {
     use super::acquire_registry_lock;
     use super::try_acquire_registry_lock;
 
-    #[allow(clippy::disallowed_methods)]
-    fn temp_state_dir(label: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "gosh-cli-registry-test-{}-{}",
-            label,
-            std::process::id()
-        ));
-        let _ = std::fs::create_dir_all(&dir);
-        dir
-    }
-
-    fn test_ctx(label: &str) -> AppContext {
-        let state_dir = temp_state_dir(label);
-        AppContext {
-            services: ServicesConfig { services: Default::default() },
-            secrets: SecretStore::load(&state_dir),
-            state_dir,
-        }
+    fn test_ctx(label: &str) -> (AppContext, tempfile::TempDir) {
+        let tmp = tempfile::Builder::new()
+            .prefix(&format!("gosh-cli-registry-test-{label}-"))
+            .tempdir()
+            .expect("tempdir");
+        let state_dir = tmp.path().to_path_buf();
+        (
+            AppContext {
+                services: ServicesConfig { services: Default::default() },
+                secrets: SecretStore::load(&state_dir),
+                state_dir,
+            },
+            tmp,
+        )
     }
 
     #[test]
     fn registry_lock_is_exclusive() {
-        let ctx = test_ctx("exclusive");
+        let (ctx, _tmp) = test_ctx("exclusive");
         let guard = acquire_registry_lock(&ctx).expect("first lock should succeed");
         let second = try_acquire_registry_lock(&ctx);
         assert!(second.is_err(), "second lock should fail while first is held");
@@ -191,7 +185,7 @@ mod tests {
 
     #[test]
     fn load_missing_returns_empty() {
-        let ctx = test_ctx("load-empty");
+        let (ctx, _tmp) = test_ctx("load-empty");
         let reg = super::ProcessRegistry::load(&ctx);
         assert!(reg.processes.is_empty());
     }
@@ -233,7 +227,7 @@ mod tests {
 
     #[test]
     fn save_and_reload() {
-        let ctx = test_ctx("save-reload");
+        let (ctx, _tmp) = test_ctx("save-reload");
         let mut reg = super::ProcessRegistry::default();
         reg.add(
             "memory".into(),

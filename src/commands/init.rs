@@ -17,26 +17,27 @@ fn apply_which_paths(template: &str) -> (String, Vec<String>) {
     let mut content = template.to_string();
     let mut warnings = Vec::new();
 
-    match which::which("gosh-memory") {
-        Ok(p) => {
-            let s = p.to_string_lossy();
-            content = content.replace(MEMORY_PATH_LINE, &format!("path = \"{s}\""));
-        }
-        Err(_) => warnings.push(
-            "gosh-memory not found in PATH; left placeholder — set [services.memory].path manually"
-                .to_string(),
-        ),
-    }
+    // (executable name, exact template line, TOML field name, service.table for messages)
+    let rules: [(&str, &str, &str, &str); 2] = [
+        ("gosh-memory", MEMORY_PATH_LINE, "path", "[services.memory].path"),
+        ("gosh-agent", AGENT_BINARY_LINE, "binary", "[services.alpha].binary"),
+    ];
 
-    match which::which("gosh-agent") {
-        Ok(p) => {
-            let s = p.to_string_lossy();
-            content = content.replace(AGENT_BINARY_LINE, &format!("binary = \"{s}\""));
+    for (exe, template_line, field, config_key) in rules {
+        match which::which(exe) {
+            Ok(p) => match p.to_str() {
+                Some(utf8) => {
+                    content = content.replace(template_line, &format!("{field} = \"{utf8}\""));
+                }
+                None => warnings.push(format!(
+                    "{exe} resolved to a non-UTF-8 path ({}); left placeholder — set {config_key} manually",
+                    p.display()
+                )),
+            },
+            Err(_) => warnings.push(format!(
+                "{exe} not found in PATH; left placeholder — set {config_key} manually"
+            )),
         }
-        Err(_) => warnings.push(
-            "gosh-agent not found in PATH; left placeholder — set [services.alpha].binary manually"
-                .to_string(),
-        ),
     }
 
     (content, warnings)

@@ -120,6 +120,40 @@ fn fact_metadata_field<'a>(
     fact.and_then(|f| f.get("metadata")).and_then(|m| m.get(field))
 }
 
+/// Try getting status from a running agent instance.
+async fn try_agent_status(
+    agent_name: &str,
+    args: &StatusArgs,
+    ctx: &AppContext,
+) -> anyhow::Result<()> {
+    let client = ctx.agent_client(agent_name, Some(60))?;
+
+    let result = client
+        .call_tool(
+            "agent_status",
+            json!({
+                "task_id": args.task_id,
+                "key": args.key,
+                "agent_id": agent_name,
+                "swarm_id": args.swarm_id,
+            }),
+        )
+        .await?;
+
+    if let Some(err) = result.get("error").filter(|v| !v.is_null()) {
+        anyhow::bail!("agent_status error: {err}");
+    }
+
+    if args.json {
+        println!("{}", format_status_json(&result)?);
+        return Ok(());
+    }
+
+    print_status_text(&result);
+
+    Ok(())
+}
+
 pub async fn run(agent_name: &str, args: &StatusArgs, ctx: &AppContext) -> anyhow::Result<()> {
     // First, try the agent for live execution status.
     let agent_result = try_agent_status(agent_name, args, ctx).await;
@@ -336,39 +370,4 @@ mod tests {
         assert!(rendered.contains("\"phase\": \"review\""));
         assert!(rendered.contains("\"tool_trace\""));
     }
-}
-
-/// Try getting status from a running agent instance.
-#[allow(clippy::items_after_test_module)]
-async fn try_agent_status(
-    agent_name: &str,
-    args: &StatusArgs,
-    ctx: &AppContext,
-) -> anyhow::Result<()> {
-    let client = ctx.agent_client(agent_name, Some(60))?;
-
-    let result = client
-        .call_tool(
-            "agent_status",
-            json!({
-                "task_id": args.task_id,
-                "key": args.key,
-                "agent_id": agent_name,
-                "swarm_id": args.swarm_id,
-            }),
-        )
-        .await?;
-
-    if let Some(err) = result.get("error").filter(|v| !v.is_null()) {
-        anyhow::bail!("agent_status error: {err}");
-    }
-
-    if args.json {
-        println!("{}", format_status_json(&result)?);
-        return Ok(());
-    }
-
-    print_status_text(&result);
-
-    Ok(())
 }
