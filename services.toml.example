@@ -8,7 +8,7 @@
 # ── Memory server ────────────────────────────────────────────────────────────
 
 [services.memory]
-path = "/absolute/path/to/gosh-ai-memory"
+path = "/absolute/path/to/gosh-memory"
 python_module = "src.mcp_server"
 port = 8765
 venv = true

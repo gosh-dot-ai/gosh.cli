@@ -11,6 +11,10 @@ pub fn fail(service: &str, msg: &str) {
     println!("  {} {:<16} {}", "FAIL".red().bold(), service, msg);
 }
 
+pub fn warn(scope: &str, msg: &str) {
+    println!("  {} {:<16} {}", "warn".yellow().bold(), scope, msg);
+}
+
 pub fn hint(msg: &str) {
     println!("    {}: {}", "hint".yellow(), msg);
 }
