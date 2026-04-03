@@ -158,6 +158,7 @@ mod tests {
     use super::acquire_registry_lock;
     use super::try_acquire_registry_lock;
 
+    #[allow(clippy::disallowed_methods)]
     fn temp_state_dir(label: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
             "gosh-cli-registry-test-{}-{}",

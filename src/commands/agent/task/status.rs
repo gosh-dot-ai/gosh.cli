@@ -339,6 +339,7 @@ mod tests {
 }
 
 /// Try getting status from a running agent instance.
+#[allow(clippy::items_after_test_module)]
 async fn try_agent_status(
     agent_name: &str,
     args: &StatusArgs,

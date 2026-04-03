@@ -309,7 +309,7 @@ mod tests {
         );
         // Year should be reasonable
         let year: i32 = date[..4].parse().unwrap();
-        assert!(year >= 2024 && year <= 2100);
+        assert!((2024..=2100).contains(&year));
     }
 
     #[test]
