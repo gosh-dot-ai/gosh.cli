@@ -47,11 +47,6 @@ fn assert_failure(output: &Output) {
     );
 }
 
-/// Write a services.toml.example into tempdir for init tests.
-fn write_example(dir: &Path, content: &str) {
-    std::fs::write(dir.join("services.toml.example"), content).unwrap();
-}
-
 /// Write a services.toml into tempdir.
 fn write_config(dir: &Path, content: &str) {
     std::fs::write(dir.join("services.toml"), content).unwrap();
@@ -80,18 +75,20 @@ fn unique_key(label: &str) -> String {
 #[test]
 fn init_creates_services_toml() {
     let dir = tempfile::tempdir().unwrap();
-    write_example(dir.path(), minimal_example());
 
     let out = gosh(dir.path(), &["init"]);
     assert_success(&out);
     assert!(stdout_str(&out).contains("Created"));
-    assert!(dir.path().join("services.toml").exists());
+    let created = std::fs::read_to_string(dir.path().join("services.toml")).unwrap();
+    assert!(
+        created.contains("[services.memory]") && created.contains("gosh-cli"),
+        "expected built-in template content"
+    );
 }
 
 #[test]
 fn init_idempotent_when_exists() {
     let dir = tempfile::tempdir().unwrap();
-    write_example(dir.path(), minimal_example());
     write_config(dir.path(), minimal_example());
 
     let out = gosh(dir.path(), &["init"]);
@@ -100,11 +97,13 @@ fn init_idempotent_when_exists() {
 }
 
 #[test]
-fn init_fails_without_example() {
+fn init_without_example_file() {
     let dir = tempfile::tempdir().unwrap();
+    assert!(!dir.path().join("services.toml.example").exists());
+
     let out = gosh(dir.path(), &["init"]);
-    assert_failure(&out);
-    assert!(stderr_str(&out).contains("services.toml.example not found"));
+    assert_success(&out);
+    assert!(dir.path().join("services.toml").exists());
 }
 
 // ── Secrets ──

@@ -279,25 +279,6 @@ mod tests {
     }
 
     #[test]
-    fn resolve_content_no_input_on_tty_errors() {
-        // In test harness, stdin is not a tty, so this would try to read stdin.
-        // We just verify the TTY branch: when atty::is returns true, we get the
-        // expected error. Since we can't control atty in tests, we instead
-        // verify the non-tty fallback doesn't panic (it blocks on stdin in
-        // real usage, but in tests stdin is closed/empty which is fine).
-        //
-        // The meaningful check: the error message when no args are given on a tty
-        // is tested indirectly — we confirm resolve_content with (None, None)
-        // doesn't panic. In CI, stdin is not a TTY so it reads empty string.
-        // Either way, the code path is exercised.
-        let result = resolve_content(None, None);
-        // On non-TTY (CI/test), reads empty stdin -> Ok("")
-        // On TTY, bails with error message
-        // Both are valid -- the point is no panic.
-        assert!(result.is_ok() || result.is_err());
-    }
-
-    #[test]
     fn today_returns_valid_date_format() {
         let date = today();
         // Must match YYYY-MM-DD
@@ -309,7 +290,7 @@ mod tests {
         );
         // Year should be reasonable
         let year: i32 = date[..4].parse().unwrap();
-        assert!(year >= 2024 && year <= 2100);
+        assert!((2024..=2100).contains(&year));
     }
 
     #[test]
