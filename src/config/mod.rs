@@ -41,18 +41,20 @@ pub fn ensure_dirs() -> Result<()> {
 pub fn check_port_conflict(host: &str, port: u16) -> Result<()> {
     // Check memory instances
     for name in MemoryInstanceConfig::list_names().unwrap_or_default() {
-        if let Ok(cfg) = MemoryInstanceConfig::load(&name) {
-            if cfg.host.as_deref() == Some(host) && cfg.port == Some(port) {
-                anyhow::bail!("port {port} on {host} is already used by memory instance '{name}'");
-            }
+        if let Ok(cfg) = MemoryInstanceConfig::load(&name)
+            && cfg.host.as_deref() == Some(host)
+            && cfg.port == Some(port)
+        {
+            anyhow::bail!("port {port} on {host} is already used by memory instance '{name}'");
         }
     }
     // Check agent instances
     for name in AgentInstanceConfig::list_names().unwrap_or_default() {
-        if let Ok(cfg) = AgentInstanceConfig::load(&name) {
-            if cfg.host.as_deref() == Some(host) && cfg.port == Some(port) {
-                anyhow::bail!("port {port} on {host} is already used by agent instance '{name}'");
-            }
+        if let Ok(cfg) = AgentInstanceConfig::load(&name)
+            && cfg.host.as_deref() == Some(host)
+            && cfg.port == Some(port)
+        {
+            anyhow::bail!("port {port} on {host} is already used by agent instance '{name}'");
         }
     }
     Ok(())

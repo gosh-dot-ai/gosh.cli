@@ -189,16 +189,16 @@ fn extract_tool_result(tool_name: &str, result: &Value) -> Result<Value> {
 
     if let Some(content) = mcp_result.and_then(|r| r.get("content")).and_then(|c| c.as_array()) {
         for item in content {
-            if item.get("type").and_then(|t| t.as_str()) == Some("text") {
-                if let Some(text) = item.get("text").and_then(|t| t.as_str()) {
-                    if is_error {
-                        bail!("{tool_name}: {text}");
-                    }
-                    if let Ok(parsed) = serde_json::from_str::<Value>(text) {
-                        return Ok(parsed);
-                    }
-                    return Ok(Value::String(text.to_string()));
+            if item.get("type").and_then(|t| t.as_str()) == Some("text")
+                && let Some(text) = item.get("text").and_then(|t| t.as_str())
+            {
+                if is_error {
+                    bail!("{tool_name}: {text}");
                 }
+                if let Ok(parsed) = serde_json::from_str::<Value>(text) {
+                    return Ok(parsed);
+                }
+                return Ok(Value::String(text.to_string()));
             }
         }
     }
@@ -210,12 +210,11 @@ fn extract_tool_result(tool_name: &str, result: &Value) -> Result<Value> {
 fn parse_sse_response(body: &str) -> Result<Value> {
     for line in body.lines() {
         let line = line.trim();
-        if let Some(data) = line.strip_prefix("data: ") {
-            if let Ok(parsed) = serde_json::from_str::<Value>(data) {
-                if parsed.get("id").is_some() {
-                    return Ok(parsed);
-                }
-            }
+        if let Some(data) = line.strip_prefix("data: ")
+            && let Ok(parsed) = serde_json::from_str::<Value>(data)
+            && parsed.get("id").is_some()
+        {
+            return Ok(parsed);
         }
     }
     bail!("no JSON-RPC response found in SSE stream")

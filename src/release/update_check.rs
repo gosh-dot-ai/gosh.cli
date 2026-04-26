@@ -55,14 +55,12 @@ async fn check_and_notify() -> Result<()> {
     let current_version = env!("CARGO_PKG_VERSION");
 
     // Check CLI
-    if let Ok(latest) = fetch_latest_tag(&client, super::repo_cli()).await {
-        if is_newer(&latest, current_version) {
-            output::hint(&format!(
-                "New gosh CLI available: v{latest} (current: v{current_version})"
-            ));
-            for line in cli_upgrade_hint(&latest).lines() {
-                output::hint(line);
-            }
+    if let Ok(latest) = fetch_latest_tag(&client, super::repo_cli()).await
+        && is_newer(&latest, current_version)
+    {
+        output::hint(&format!("New gosh CLI available: v{latest} (current: v{current_version})"));
+        for line in cli_upgrade_hint(&latest).lines() {
+            output::hint(line);
         }
     }
 

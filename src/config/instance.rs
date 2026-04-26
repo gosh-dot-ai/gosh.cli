@@ -60,10 +60,10 @@ pub trait InstanceConfig: Serialize + for<'de> Deserialize<'de> {
         for entry in fs::read_dir(&dir)? {
             let entry = entry?;
             let path = entry.path();
-            if path.extension().is_some_and(|e| e == "toml") {
-                if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                    names.push(stem.to_string());
-                }
+            if path.extension().is_some_and(|e| e == "toml")
+                && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
+            {
+                names.push(stem.to_string());
             }
         }
         names.sort();
@@ -129,10 +129,10 @@ pub trait InstanceConfig: Serialize + for<'de> Deserialize<'de> {
         if path.exists() {
             fs::remove_file(&path)?;
         }
-        if let Ok(Some(current)) = Self::get_current() {
-            if current == name {
-                let _ = fs::remove_file(Self::current_file());
-            }
+        if let Ok(Some(current)) = Self::get_current()
+            && current == name
+        {
+            let _ = fs::remove_file(Self::current_file());
         }
         Ok(())
     }
