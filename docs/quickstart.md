@@ -1,3 +1,8 @@
+<!--
+  Copyright 2026 (c) Mitja Goroshevsky and GOSH Technology Ltd.
+  SPDX-License-Identifier: MIT
+-->
+
 # Quickstart
 
 Get gosh running on your machine in about 10 minutes. By the end you'll

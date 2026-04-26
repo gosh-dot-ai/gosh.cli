@@ -1,3 +1,8 @@
+<!--
+  Copyright 2026 (c) Mitja Goroshevsky and GOSH Technology Ltd.
+  SPDX-License-Identifier: MIT
+-->
+
 # GOSH CLI — Specification v2
 
 ## Overview

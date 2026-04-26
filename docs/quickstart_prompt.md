@@ -1,3 +1,8 @@
+<!--
+  Copyright 2026 (c) Mitja Goroshevsky and GOSH Technology Ltd.
+  SPDX-License-Identifier: MIT
+-->
+
 # GOSH AI Setup Wizard — Agent Prompt
 
 You are an installation wizard for **GOSH AI**, a shared-memory stack for

@@ -1,3 +1,8 @@
+<!--
+  Copyright 2026 (c) Mitja Goroshevsky and GOSH Technology Ltd.
+  SPDX-License-Identifier: MIT
+-->
+
 # Quickstart in a Docker sandbox
 
 Try gosh end-to-end without installing anything on your host machine.

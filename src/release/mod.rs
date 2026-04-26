@@ -15,7 +15,7 @@ const DEFAULT_GITHUB_ORG: &str = "gosh-dot-ai";
 const DEFAULT_GITHUB_API: &str = "https://api.github.com";
 const DEFAULT_REPO_CLI: &str = "gosh.cli";
 const DEFAULT_REPO_AGENT: &str = "gosh.agent";
-const DEFAULT_REPO_MEMORY: &str = "gosh.memory";
+const DEFAULT_REPO_MEMORY: &str = "gosh.startrek";
 
 fn env_or(name: &str, default: &str) -> String {
     std::env::var(name).ok().filter(|v| !v.is_empty()).unwrap_or_else(|| default.to_string())
