@@ -1,76 +1,85 @@
 // Copyright 2026 (c) Mitja Goroshevsky and GOSH Technology Ltd.
-// License: MIT
+// SPDX-License-Identifier: MIT
 
 pub mod agent;
-pub mod doctor;
-pub mod init;
-pub mod logs;
+pub mod bundle;
 pub mod memory;
-pub mod secret;
-pub mod start;
+pub mod setup;
 pub mod status;
-pub mod stop;
 
+use anyhow::Result;
 use clap::Args;
+use clap::Parser;
 use clap::Subcommand;
 
-use crate::context::AppContext;
+use crate::context::CliContext;
 
-#[derive(Args)]
-pub struct ServiceArgs {
-    /// Service name (all if omitted)
-    pub service: Option<String>,
+/// Shared `--instance` flag for subcommands that target an existing
+/// memory or agent instance. Flatten via `#[command(flatten)]` into the
+/// subcommand's `Args` struct; do NOT flatten into subcommands that
+/// create instances (those have their own primary name source) or that
+/// manage the instance set itself.
+#[derive(Args, Default)]
+pub struct InstanceTarget {
+    /// Instance name (defaults to current).
+    #[arg(long = "instance")]
+    pub instance: Option<String>,
+}
+
+impl InstanceTarget {
+    pub fn as_deref(&self) -> Option<&str> {
+        self.instance.as_deref()
+    }
+}
+
+#[derive(Parser)]
+#[command(name = "gosh", version, about = "CLI for gosh.memory and gosh-agent")]
+pub struct Cli {
+    /// Test mode: use file-based keychain instead of OS keychain
+    #[arg(long, global = true)]
+    pub test_mode: bool,
+
+    #[command(subcommand)]
+    pub command: Command,
 }
 
 #[derive(Subcommand)]
-pub enum Commands {
-    /// Initialize services.toml with defaults
-    Init,
+pub enum Command {
+    /// Manage gosh.memory instances
+    Memory(memory::MemoryArgs),
 
-    /// Start services in dependency order
-    Start(ServiceArgs),
-
-    /// Stop services in reverse dependency order
-    Stop(ServiceArgs),
-
-    /// Restart services
-    Restart(ServiceArgs),
-
-    /// Show status of all services
-    Status,
-
-    /// Run diagnostics
-    Doctor,
-
-    /// Manage secrets (API keys, tokens)
-    #[command(subcommand)]
-    Secret(secret::SecretCommands),
-
-    /// Memory operations (store, recall, ask, import, list, ...)
-    #[command(subcommand)]
-    Memory(memory::MemoryCommands),
-
-    /// Manage agent instances
+    /// Manage gosh-agent instances
     Agent(agent::AgentArgs),
 
-    /// View service logs
-    Logs(logs::LogsArgs),
+    /// Show status of all running services
+    Status,
+
+    /// Download and install components. Default selection is agent +
+    /// memory; both are idempotent (skip if already at the requested
+    /// version). For CLI use `--component cli` to print the install.sh
+    /// curl one-liner — the running gosh process cannot safely
+    /// overwrite its own binary in place.
+    Setup(setup::SetupArgs),
+
+    /// Create an offline bundle with all components
+    Bundle(bundle::BundleArgs),
 }
 
-pub async fn run(command: Commands, ctx: &AppContext) -> anyhow::Result<()> {
-    match command {
-        Commands::Init => init::run(&ctx.state_dir),
-        Commands::Secret(cmd) => secret::run(&cmd, ctx),
-        Commands::Start(args) => start::run(ctx, args.service.as_deref()).await,
-        Commands::Stop(args) => stop::run(ctx, args.service.as_deref()),
-        Commands::Restart(args) => {
-            stop::run(ctx, args.service.as_deref())?;
-            start::run(ctx, args.service.as_deref()).await
-        }
-        Commands::Status => status::run(ctx).await,
-        Commands::Doctor => doctor::run(ctx),
-        Commands::Memory(cmd) => memory::run(ctx, &cmd).await,
-        Commands::Agent(args) => agent::run(&args, ctx).await,
-        Commands::Logs(args) => logs::run(ctx, &args),
+pub async fn dispatch(cli: Cli, ctx: &CliContext) -> Result<()> {
+    crate::config::ensure_dirs()?;
+
+    // Spawn async update check (non-blocking, throttled).
+    // Skip for offline bundle commands that must work without network.
+    let is_offline = matches!(&cli.command, Command::Setup(a) if a.bundle.is_some());
+    if !is_offline {
+        crate::release::update_check::spawn_check();
+    }
+
+    match cli.command {
+        Command::Memory(args) => memory::dispatch(args, ctx).await,
+        Command::Agent(args) => agent::dispatch(args, ctx).await,
+        Command::Status => status::run().await,
+        Command::Setup(args) => setup::run(args).await,
+        Command::Bundle(args) => bundle::run(args).await,
     }
 }

@@ -1,52 +1,38 @@
 // Copyright 2026 (c) Mitja Goroshevsky and GOSH Technology Ltd.
-// License: MIT
+// SPDX-License-Identifier: MIT
 
 mod clients;
 mod commands;
-mod context;
-mod meta;
-mod output;
-mod services;
-mod stores;
-
-use std::path::PathBuf;
+mod config;
+pub mod context;
+pub mod keychain;
+mod process;
+pub mod release;
+mod utils;
 
 use clap::Parser;
-use context::AppContext;
-
-#[derive(Parser)]
-#[command(name = "gosh", about = "GOSH.AI CLI — orchestrator for gosh services")]
-struct Cli {
-    /// State directory (default: current directory)
-    #[arg(long, default_value = ".")]
-    state_dir: PathBuf,
-
-    #[command(subcommand)]
-    command: commands::Commands,
-}
+use commands::Cli;
+use utils::output;
 
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive(tracing::Level::WARN.into()),
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn")),
         )
         .init();
 
     let cli = Cli::parse();
-    let state_dir = std::fs::canonicalize(&cli.state_dir).unwrap_or(cli.state_dir.clone());
 
-    let ctx = match AppContext::load(&state_dir) {
-        Ok(ctx) => ctx,
-        Err(e) => {
-            eprintln!("{}: {e}", colored::Colorize::red("error"));
-            std::process::exit(1);
-        }
+    let ctx = if cli.test_mode {
+        context::CliContext::test_mode()
+    } else {
+        context::CliContext::production()
     };
 
-    if let Err(e) = commands::run(cli.command, &ctx).await {
-        eprintln!("{}: {e}", colored::Colorize::red("error"));
+    if let Err(err) = commands::dispatch(cli, &ctx).await {
+        output::error(&format!("{err:#}"));
         std::process::exit(1);
     }
 }

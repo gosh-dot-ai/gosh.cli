@@ -1,140 +1,154 @@
 // Copyright 2026 (c) Mitja Goroshevsky and GOSH Technology Ltd.
-// License: MIT
+// SPDX-License-Identifier: MIT
 
-mod ask;
-mod config;
-mod flush;
-mod get;
-mod import;
-mod index;
-mod ingest;
-mod list;
-mod membership;
-mod prompt;
-mod recall;
-mod reextract;
-mod secret;
-mod stats;
-mod store;
+pub mod auth;
+pub mod config;
+pub mod data;
+pub mod init;
+pub mod instance;
+pub mod logs;
+pub mod prompt;
+pub mod secret;
+pub mod setup;
+pub mod start;
+pub mod status;
+pub mod stop;
 
+use std::time::Duration;
+
+use anyhow::Result;
+use clap::Args;
 use clap::Subcommand;
 
-use crate::context::AppContext;
+use crate::clients::mcp::McpClient;
+use crate::config::InstanceConfig;
+use crate::config::MemoryInstanceConfig;
+use crate::config::MemoryMode;
+use crate::config::MemoryRuntime;
+use crate::context::CliContext;
+use crate::keychain;
+use crate::process::state;
+use crate::utils::docker;
 
-#[derive(Subcommand)]
-pub enum MemoryCommands {
-    /// Store data into memory (text, file, or stdin)
-    Store(store::StoreArgs),
-
-    /// Semantic search over memory
-    Recall(recall::RecallArgs),
-
-    /// Ask a question (recall + LLM inference)
-    Ask(ask::AskArgs),
-
-    /// Manage canonical memory runtime config
-    #[command(subcommand)]
-    Config(config::ConfigCommands),
-
-    /// Get a single fact by ID
-    Get(get::GetArgs),
-
-    /// List facts in memory
-    List(list::ListArgs),
-
-    /// Import conversation history (file, directory, git)
-    Import(import::ImportArgs),
-
-    /// Ingest data (document or pre-extracted facts)
-    #[command(subcommand)]
-    Ingest(ingest::IngestCommands),
-
-    /// Show memory stats
-    Stats(stats::StatsArgs),
-
-    /// Build embedding index for retrieval
-    BuildIndex(index::BuildIndexArgs),
-
-    /// Rebuild tier 2/3 without re-embedding
-    Flush(flush::FlushArgs),
-
-    /// Re-extract facts from stored raw sessions
-    Reextract(reextract::ReextractArgs),
-
-    /// Manage secrets in memory
-    #[command(subcommand)]
-    Secret(secret::SecretCommands),
-
-    /// Manage extraction prompts
-    #[command(subcommand)]
-    Prompt(prompt::PromptCommands),
-
-    /// Manage group memberships (ACL)
-    #[command(subcommand)]
-    Membership(membership::MembershipCommands),
+/// Build an MCP client using the admin token (for auth/secret/config/prompt
+/// operations).
+fn resolve_admin_client(instance: Option<&str>, ctx: &CliContext) -> Result<McpClient> {
+    let cfg = MemoryInstanceConfig::resolve(instance)?;
+    let kc = ctx.keychain.as_ref();
+    let secrets = keychain::MemorySecrets::load(kc, &cfg.name)?;
+    Ok(McpClient::new(&cfg.url, secrets.server_token, secrets.admin_token, Some(120)))
 }
 
-pub async fn run(ctx: &AppContext, cmd: &MemoryCommands) -> anyhow::Result<()> {
-    match cmd {
-        MemoryCommands::Store(args) => {
-            let client = ctx.memory_client(Some(120))?;
-            store::run(&client, args).await
+/// How long we'll wait on a Docker daemon call before giving up and
+/// reporting "unknown". A healthy daemon answers in milliseconds; this
+/// upper bound exists so a hung daemon can't freeze `memory instance list`.
+const DOCKER_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// Single source of truth for the human-readable runtime status of a
+/// memory instance. Used by `memory status` and `memory instance list`.
+///
+/// - Local + Binary  → check PID file
+/// - Local + Docker  → check container state (3s timeout — hung daemon →
+///   "unknown")
+/// - Remote / SSH    → HTTP `/health` check (best-effort, 2s timeout)
+pub(crate) async fn instance_status_label(cfg: &MemoryInstanceConfig) -> String {
+    match cfg.mode {
+        MemoryMode::Local => match cfg.runtime {
+            MemoryRuntime::Binary => {
+                if state::is_running("memory", &cfg.name) {
+                    let pid = state::read_pid("memory", &cfg.name);
+                    let pid_str = pid.map(|p| p.to_string()).unwrap_or_else(|| "-".into());
+                    format!("running (pid: {pid_str})")
+                } else {
+                    "stopped".to_string()
+                }
+            }
+            MemoryRuntime::Docker => {
+                let container_name = start::docker_container_name(&cfg.name);
+                let probe =
+                    tokio::task::spawn_blocking(move || docker::is_running(&container_name));
+                match tokio::time::timeout(DOCKER_PROBE_TIMEOUT, probe).await {
+                    Ok(Ok(true)) => {
+                        let id = start::read_container_id(&cfg.name);
+                        let id_str = id.as_deref().map(|s| &s[..12.min(s.len())]).unwrap_or("-");
+                        format!("running (container: {id_str})")
+                    }
+                    Ok(Ok(false)) => "stopped".to_string(),
+                    // Docker daemon hung past the timeout, or the spawned
+                    // task panicked — treat both as "we couldn't tell".
+                    _ => "unknown".to_string(),
+                }
+            }
+        },
+        MemoryMode::Remote | MemoryMode::Ssh => {
+            let client = match reqwest::Client::builder().timeout(Duration::from_secs(2)).build() {
+                Ok(c) => c,
+                Err(_) => return "unknown".to_string(),
+            };
+            let health_url = format!("{}/health", cfg.url.trim_end_matches('/'));
+            match client.get(&health_url).send().await {
+                Ok(resp) if resp.status().is_success() => "connected".to_string(),
+                _ => "unreachable".to_string(),
+            }
         }
-        MemoryCommands::Recall(args) => {
-            let client = ctx.memory_client(Some(120))?;
-            recall::run(&client, args).await
-        }
-        MemoryCommands::Ask(args) => {
-            let client = ctx.memory_client(Some(120))?;
-            ask::run(&client, args).await
-        }
-        MemoryCommands::Config(cmd) => {
-            let client = ctx.memory_client(Some(30))?;
-            config::run(&client, cmd).await
-        }
-        MemoryCommands::Get(args) => {
-            let client = ctx.memory_client(Some(30))?;
-            get::run(&client, args).await
-        }
-        MemoryCommands::List(args) => {
-            let client = ctx.memory_client(Some(120))?;
-            list::run(&client, args).await
-        }
-        MemoryCommands::Import(args) => {
-            let client = ctx.memory_client(None)?;
-            import::run(&client, args).await
-        }
-        MemoryCommands::Ingest(cmd) => {
-            let client = ctx.memory_client(None)?;
-            ingest::run(&client, cmd).await
-        }
-        MemoryCommands::Stats(args) => {
-            let client = ctx.memory_client(Some(30))?;
-            stats::run(&client, args).await
-        }
-        MemoryCommands::BuildIndex(args) => {
-            let client = ctx.memory_client(None)?;
-            index::run(&client, args).await
-        }
-        MemoryCommands::Flush(args) => {
-            let client = ctx.memory_client(None)?;
-            flush::run(&client, args).await
-        }
-        MemoryCommands::Reextract(args) => {
-            let client = ctx.memory_client(None)?;
-            reextract::run(&client, args).await
-        }
-        MemoryCommands::Secret(cmd) => {
-            let client = ctx.memory_client(Some(30))?;
-            secret::run(&client, cmd).await
-        }
-        MemoryCommands::Prompt(cmd) => {
-            let client = ctx.memory_client(Some(30))?;
-            prompt::run(&client, cmd).await
-        }
-        MemoryCommands::Membership(cmd) => {
-            let client = ctx.memory_client(Some(30))?;
-            membership::run(&client, cmd).await
-        }
+    }
+}
+
+#[derive(Args)]
+pub struct MemoryArgs {
+    #[command(subcommand)]
+    pub command: MemoryCommand,
+}
+
+#[derive(Subcommand)]
+pub enum MemoryCommand {
+    /// Setup a new memory server connection
+    Setup(setup::SetupArgs),
+
+    /// Start a local memory instance
+    Start(start::StartArgs),
+    /// Stop a memory instance
+    Stop(stop::StopArgs),
+    /// Show status of a memory instance
+    Status(status::StatusArgs),
+    /// View memory server logs (local mode only)
+    Logs(logs::LogsArgs),
+
+    /// Manage memory instances (use, list)
+    Instance(instance::InstanceArgs),
+
+    /// Initialize a memory namespace
+    Init(init::InitArgs),
+
+    /// Data operations (store, recall, ask, query, import, ingest, etc.)
+    Data(data::DataArgs),
+
+    /// Authentication and access control
+    Auth(auth::AuthArgs),
+
+    /// Manage application secrets in memory server
+    Secret(secret::SecretArgs),
+
+    /// Manage runtime config
+    Config(config::ConfigArgs),
+
+    /// Manage extraction prompts
+    Prompt(prompt::PromptArgs),
+}
+
+pub async fn dispatch(args: MemoryArgs, ctx: &CliContext) -> Result<()> {
+    match args.command {
+        MemoryCommand::Setup(a) => setup::run(a, ctx).await,
+        MemoryCommand::Start(a) => start::run(a, ctx).await,
+        MemoryCommand::Stop(a) => stop::run(a, ctx).await,
+        MemoryCommand::Status(a) => status::run(a, ctx).await,
+        MemoryCommand::Logs(a) => logs::run(a, ctx).await,
+        MemoryCommand::Instance(a) => instance::dispatch(a).await,
+        MemoryCommand::Init(a) => init::run(a, ctx).await,
+        MemoryCommand::Data(a) => data::dispatch(a, ctx).await,
+        MemoryCommand::Auth(a) => auth::dispatch(a, ctx).await,
+        MemoryCommand::Secret(a) => secret::dispatch(a, ctx).await,
+        MemoryCommand::Config(a) => config::dispatch(a, ctx).await,
+        MemoryCommand::Prompt(a) => prompt::dispatch(a, ctx).await,
     }
 }

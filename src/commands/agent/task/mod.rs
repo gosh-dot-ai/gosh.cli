@@ -1,35 +1,63 @@
 // Copyright 2026 (c) Mitja Goroshevsky and GOSH Technology Ltd.
-// License: MIT
+// SPDX-License-Identifier: MIT
 
-mod create;
-mod list;
-mod run;
-mod status;
+pub mod create;
+pub mod list;
+pub mod run;
+pub mod status;
 
+use anyhow::Result;
+use clap::Args;
 use clap::Subcommand;
 
-use crate::context::AppContext;
+use crate::clients::mcp::McpClient;
+use crate::config::AgentInstanceConfig;
+use crate::config::InstanceConfig;
 
-#[derive(Subcommand)]
-pub enum TaskCommands {
-    /// Create a new task
-    Create(create::CreateArgs),
-
-    /// Run a task on this agent
-    Run(run::RunArgs),
-
-    /// Check task execution status
-    Status(status::StatusArgs),
-
-    /// List tasks for this agent
-    List(list::ListArgs),
+#[derive(Args)]
+pub struct TaskArgs {
+    #[command(subcommand)]
+    pub command: TaskCommand,
 }
 
-pub async fn run(agent_name: &str, command: &TaskCommands, ctx: &AppContext) -> anyhow::Result<()> {
-    match command {
-        TaskCommands::Create(args) => create::run(agent_name, args, ctx).await,
-        TaskCommands::Run(args) => run::run(agent_name, args, ctx).await,
-        TaskCommands::Status(args) => status::run(agent_name, args, ctx).await,
-        TaskCommands::List(args) => list::run(agent_name, args, ctx).await,
+#[derive(Subcommand)]
+pub enum TaskCommand {
+    /// Create a task
+    Create(create::TaskCreateArgs),
+    /// Run a task
+    Run(run::TaskRunArgs),
+    /// Get task status
+    Status(status::TaskStatusArgs),
+    /// List tasks
+    List(list::TaskListArgs),
+}
+
+pub async fn dispatch(args: TaskArgs) -> Result<()> {
+    match args.command {
+        TaskCommand::Create(a) => create::run(a).await,
+        TaskCommand::Run(a) => run::run(a).await,
+        TaskCommand::Status(a) => status::run(a).await,
+        TaskCommand::List(a) => list::run(a).await,
     }
+}
+
+/// Build an MCP client for the resolved agent instance. Errors when the
+/// agent has never been started — host/port stay unset until `agent start`
+/// resolves and persists them.
+pub fn resolve_agent_client(instance: Option<&str>) -> Result<McpClient> {
+    let cfg = AgentInstanceConfig::resolve(instance)?;
+    let host = cfg.host.as_deref().ok_or_else(|| {
+        anyhow::anyhow!(
+            "agent '{}' has no bind host configured — run `gosh agent start` first",
+            cfg.name,
+        )
+    })?;
+    let port = cfg.port.ok_or_else(|| {
+        anyhow::anyhow!(
+            "agent '{}' has no bind port configured — run `gosh agent start` first",
+            cfg.name,
+        )
+    })?;
+    let url = format!("http://{host}:{port}");
+    Ok(McpClient::new(&url, None, None, Some(300)))
 }
