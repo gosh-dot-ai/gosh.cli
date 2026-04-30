@@ -38,8 +38,13 @@ pub fn ensure_dirs() -> Result<()> {
 
 /// Check that no existing instance (memory or agent) already uses this
 /// host:port. Returns an error naming the conflicting instance if found.
+///
+/// Memory instances are checked against their own `host`/`port` fields.
+/// Agent instances are checked against the daemon's `GlobalConfig`
+/// (`~/.gosh/agent/state/<name>/config.toml`) — the source of truth
+/// post-MCP-unification — rather than `AgentInstanceConfig`, which no
+/// longer carries those fields.
 pub fn check_port_conflict(host: &str, port: u16) -> Result<()> {
-    // Check memory instances
     for name in MemoryInstanceConfig::list_names().unwrap_or_default() {
         if let Ok(cfg) = MemoryInstanceConfig::load(&name)
             && cfg.host.as_deref() == Some(host)
@@ -48,11 +53,10 @@ pub fn check_port_conflict(host: &str, port: u16) -> Result<()> {
             anyhow::bail!("port {port} on {host} is already used by memory instance '{name}'");
         }
     }
-    // Check agent instances
     for name in AgentInstanceConfig::list_names().unwrap_or_default() {
-        if let Ok(cfg) = AgentInstanceConfig::load(&name)
-            && cfg.host.as_deref() == Some(host)
-            && cfg.port == Some(port)
+        if let Some(daemon) = crate::commands::agent::read_daemon_config(&name)
+            && daemon.host.as_deref() == Some(host)
+            && daemon.port == Some(port)
         {
             anyhow::bail!("port {port} on {host} is already used by agent instance '{name}'");
         }

@@ -17,18 +17,14 @@ use crate::keychain;
 use crate::utils::join_token;
 use crate::utils::output;
 
+/// `gosh agent import <BOOTSTRAP_FILE>` — provisions identity from a
+/// remote bundle. Like `agent create`, this command is identity-only;
+/// host/port and other daemon-spawn knobs are configured later via
+/// `gosh agent setup`.
 #[derive(Args)]
 pub struct ImportArgs {
     /// Path to bootstrap JSON file
     pub bootstrap_file: PathBuf,
-
-    /// Listen port
-    #[arg(long)]
-    pub port: Option<u16>,
-
-    /// Listen address
-    #[arg(long, default_value = "127.0.0.1")]
-    pub host: String,
 
     /// Overwrite an existing local agent of the same name (re-import)
     #[arg(long, short = 'f')]
@@ -40,11 +36,6 @@ struct BootstrapData {
     join_token: String,
     secret_key: String,
 }
-
-/// Port range for auto-allocation (first port after default memory server
-/// 8765/8766).
-const AUTO_PORT_START: u16 = 8767;
-const AUTO_PORT_END: u16 = 9000;
 
 pub async fn run(args: ImportArgs, ctx: &CliContext) -> Result<()> {
     // 1. Read and validate bootstrap file
@@ -117,44 +108,32 @@ pub async fn run(args: ImportArgs, ctx: &CliContext) -> Result<()> {
     secrets.save(ctx.keychain.as_ref(), agent_name)?;
     output::success("Credentials saved to OS keychain");
 
-    // 7. Allocate port if not specified
-    let port = args.port.unwrap_or_else(|| {
-        // Simple auto-allocate: start from 8767, find first free
-        (AUTO_PORT_START..AUTO_PORT_END)
-            .find(|p| !port_in_use(&args.host, *p))
-            .unwrap_or(AUTO_PORT_START)
-    });
-
-    // 8. Write agent instance config
+    // 7. Write agent instance config (identity only — host/port/watch
+    // belong to GlobalConfig and get written by `gosh agent setup`).
     let cfg = AgentInstanceConfig {
         name: agent_name.to_string(),
         memory_instance: None,
-        host: Some(args.host),
-        port: Some(port),
         binary: None,
         created_at: Utc::now(),
-        watch: false,
-        watch_budget: None,
-        watch_key: None,
-        watch_context_key: None,
-        watch_agent_id: None,
-        watch_swarm_id: None,
-        poll_interval: None,
         last_started_at: None,
+        host: None,
+        port: None,
+        watch: None,
+        watch_key: None,
+        watch_swarm_id: None,
+        watch_agent_id: None,
+        watch_context_key: None,
+        watch_budget: None,
+        poll_interval: None,
     };
     cfg.save()?;
 
-    // 9. Set as current
+    // 8. Set as current
     AgentInstanceConfig::set_current(agent_name)?;
     output::success("Set as current agent");
     output::blank();
 
-    output::hint("gosh agent setup [--platform <name>]");
-    output::hint("gosh agent start");
+    output::hint("next: gosh agent setup [--host H] [--port P] [--platform <name>]");
 
     Ok(())
-}
-
-fn port_in_use(host: &str, port: u16) -> bool {
-    std::net::TcpListener::bind(format!("{host}:{port}")).is_err()
 }

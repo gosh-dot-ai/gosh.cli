@@ -19,7 +19,7 @@ use crate::context::CliContext;
 /// subcommand's `Args` struct; do NOT flatten into subcommands that
 /// create instances (those have their own primary name source) or that
 /// manage the instance set itself.
-#[derive(Args, Default)]
+#[derive(Args, Clone, Default)]
 pub struct InstanceTarget {
     /// Instance name (defaults to current).
     #[arg(long = "instance")]

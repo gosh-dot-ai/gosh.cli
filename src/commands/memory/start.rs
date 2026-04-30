@@ -17,6 +17,7 @@ use crate::keychain;
 use crate::process::launcher;
 use crate::process::state;
 use crate::utils::docker;
+use crate::utils::net::client_host_for_local;
 use crate::utils::output;
 
 #[derive(Args)]
@@ -118,7 +119,7 @@ async fn start_binary(
         name: &cfg.name,
     })?;
 
-    let health_url = format!("http://{host}:{port}/health");
+    let health_url = build_health_url(host, port);
     let elapsed = launcher::wait_for_health(&health_url, Duration::from_secs(30)).await?;
     output::started(pid, port, elapsed.as_millis());
 
@@ -195,7 +196,7 @@ async fn start_docker(
     // Save container ID for stop/status
     save_container_id(&cfg.name, &container_id)?;
 
-    let health_url = format!("http://{host}:{port}/health");
+    let health_url = build_health_url(host, port);
     let elapsed = launcher::wait_for_health(&health_url, Duration::from_secs(30)).await?;
 
     let short_id = &container_id[..12.min(container_id.len())];
@@ -232,4 +233,44 @@ pub fn read_container_id(instance_name: &str) -> Option<String> {
 pub fn remove_container_file(instance_name: &str) {
     let path = crate::config::run_dir().join(format!("memory_{instance_name}.container"));
     let _ = std::fs::remove_file(path);
+}
+
+/// Build the post-spawn health-probe URL. The memory binary or
+/// container was just told to bind `bind_host` (the operator's
+/// `--host`), but the CLI has to *connect* to it from the same
+/// machine; rewriting `0.0.0.0` / `::` to a loopback destination
+/// lets `gosh memory start --host 0.0.0.0` succeed regardless of
+/// kernel SYN-routing rules. The bind argument passed to the
+/// memory binary stays exactly what the operator asked for.
+fn build_health_url(bind_host: &str, port: u16) -> String {
+    let host = client_host_for_local(bind_host);
+    format!("http://{host}:{port}/health")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_health_url;
+
+    #[test]
+    fn health_url_normalises_unspecified_bind_to_loopback() {
+        // `gosh memory setup local --host 0.0.0.0` previously made
+        // the post-spawn health probe target `http://0.0.0.0:<port>`,
+        // which is a bind address rather than a portable client
+        // destination. Pin the rewrite so the regression can't sneak
+        // back in for either the binary or docker code paths.
+        assert_eq!(build_health_url("0.0.0.0", 8765), "http://127.0.0.1:8765/health");
+        assert_eq!(build_health_url("::", 8765), "http://[::1]:8765/health");
+    }
+
+    #[test]
+    fn health_url_brackets_ipv6_loopback() {
+        // Same RFC 3986 §3.2.2 reason as the agent-side builders.
+        assert_eq!(build_health_url("::1", 8765), "http://[::1]:8765/health");
+    }
+
+    #[test]
+    fn health_url_passes_concrete_hosts_through() {
+        assert_eq!(build_health_url("127.0.0.1", 8765), "http://127.0.0.1:8765/health");
+        assert_eq!(build_health_url("memory.internal", 8765), "http://memory.internal:8765/health");
+    }
 }

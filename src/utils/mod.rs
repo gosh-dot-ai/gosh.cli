@@ -3,4 +3,5 @@
 
 pub mod docker;
 pub mod join_token;
+pub mod net;
 pub mod output;

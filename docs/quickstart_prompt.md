@@ -161,22 +161,29 @@ provisioned?
    only. Skip everything agent-related; hand the user the connection
    details from whatever bundle they have.
 
-### Q3 — Agent role (only if Q2 ≠ 3)
+### Capture hooks follow-up (only if Q2 ≠ 3)
 
-Once `gosh-agent` is on the machine, what do you want it to do?
+`gosh agent setup` always writes the daemon's `GlobalConfig` and
+installs an autostart artifact (launchd plist on macOS, systemd user
+unit on Linux), so the daemon comes up on every login without an
+explicit `gosh agent start`. The remaining knob is whether to **also**
+hook the agent into a coding CLI for capture:
 
-1. **Capture hooks** — installs Stop / UserPromptSubmit hooks into
-   the chosen coding CLI (Claude Code / Codex / Gemini), writes each
-   prompt+response into memory automatically, and registers an
-   MCP-proxy so the CLI's LLM can call memory tools.
-2. **Headless autonomous worker** — runs `gosh agent start --watch …`
-   long-lived; pulls tasks from memory and executes them.
-3. **Both (hybrid)** — same install of `gosh-agent` covers both
-   roles; you start the headless `gosh agent start --watch` AND
-   register the capture hook into the CLI. Smoke each flow
-   separately.
+- **Yes — capture hooks**: setup writes `Stop` / `UserPromptSubmit`
+  hooks into the chosen coding CLI (Claude Code / Codex / Gemini) and
+  registers `gosh-memory-<agent>` as an MCP server so the LLM can call
+  memory tools from a session. Every prompt+response lands in memory.
+- **No**: skip the hooks. The daemon still runs (autostart) and accepts
+  task dispatch / MCP calls over its HTTP interface, just no automatic
+  capture from a coding CLI on this machine.
 
-### Q4 — LLM backend (only if Q2 ≠ 3)
+Either answer leaves the autonomous-watcher knob (`--watch …` on
+`gosh agent setup`) available as a separate, optional add-on for the
+operator who wants the daemon to pull tasks from a courier
+subscription. Most users say "yes, hooks for my coding CLI" and stop
+there.
+
+### Q3 — LLM backend (only if Q2 ≠ 3)
 
 Anthropic API (default), Groq, OpenAI, Google, or a local CLI backend
 (`claude-code`, `codex-cli`, `gemini-cli` running as a subprocess).
@@ -184,17 +191,18 @@ The choice determines which API key to provision in the secrets step.
 
 ### Confirm and proceed
 
-Summarise the user's four answers in one sentence and ask "Proceed?"
-before acting. Example:
+Summarise the user's three answers + the capture follow-up in one
+sentence and ask "Proceed?" before acting. Example:
 
 > "Plan: Q1=1 (host memory locally in Docker), Q2=1 (create a fresh
-> agent identity), Q3=1 (capture hooks for Claude Code), Q4=Anthropic.
+> agent identity), capture=yes (hooks for Claude Code), Q3=Anthropic.
 > I'll install `gosh`, run `gosh memory setup local`, then
 > `gosh agent create alpha --memory <local>`, then `gosh agent setup
-> --instance alpha --platform claude`, set the Anthropic API key on
-> the memory instance, and verify hooks landed in
-> `<cwd>/.claude/settings.json` (project scope is the default — see
-> Step 4). Proceed?"
+> --instance alpha --platform claude` (which writes the daemon's
+> `GlobalConfig`, allocates a port, installs autostart, and registers
+> the capture hooks), set the Anthropic API key on the memory
+> instance, and verify hooks landed in `<cwd>/.claude/settings.json`
+> (project scope is the default — see Step 4). Proceed?"
 
 ---
 
@@ -338,16 +346,16 @@ gosh memory config set --key <namespace> '<json-config>'
 
 You'll therefore push two secrets — embeddings always need
 `openai` (OpenAI hosts the embedding models), inference/extraction
-needs whichever provider Q4 picked:
+needs whichever provider Q3 picked:
 
 ```
 gosh memory secret set-from-env OPENAI_API_KEY  --name openai      --key <namespace>
-gosh memory secret set-from-env <Q4_KEY>        --name <q4-label>  --key <namespace>
+gosh memory secret set-from-env <Q3_KEY>        --name <q3-label>  --key <namespace>
 ```
 
-Skip the second call if Q4 = OpenAI (one secret covers everything).
+Skip the second call if Q3 = OpenAI (one secret covers everything).
 
-Minimal config JSON. Below is a **Q4 = Anthropic** example; substitute
+Minimal config JSON. Below is a **Q3 = Anthropic** example; substitute
 the `inference`/`extraction` profile blocks per the prefix table for
 other backends.
 
@@ -392,10 +400,10 @@ other backends.
 }
 ```
 
-**Per-Q4 swap (replace both `extraction` and `inference` profile
+**Per-Q3 swap (replace both `extraction` and `inference` profile
 blocks identically):**
 
-| Q4 | `model` | `secret_ref.name` | `inference_secret_ref.name` |
+| Q3 | `model` | `secret_ref.name` | `inference_secret_ref.name` |
 |---|---|---|---|
 | Anthropic | `anthropic/claude-haiku-4-5-20251001` | `anthropic` | `anthropic` |
 | Groq | `qwen/qwen3-32b` (or any `groq/`/`meta-llama/`-prefixed model Groq serves) | `groq` | `groq` |
@@ -419,7 +427,7 @@ gosh memory auth swarm create <swarm-name> --owner <owner-principal>
 ```
 
 Owner is the principal that `gosh memory setup local` printed in 2.1
-(e.g. `service:roman`). The agent created in Step 3 will be added to
+(e.g. `service:gosh`). The agent created in Step 3 will be added to
 this swarm.
 
 #### Q1 = 2 (import administrative access to remote memory)
@@ -481,33 +489,43 @@ you usually do not need Step 2 (no local memory configuration needed).
 > delete <name>`" — that subcommand was never implemented; the
 > `--force` flag is the supported recovery path.
 
-### Step 4 — Wire up capture hooks (only if Q3 = 1 or 3)
+### Step 4 — Configure the agent daemon + optional capture hooks (skip if Q2 = 3)
 
-`gosh agent setup` writes hooks AND MCP config at **project scope by
+`gosh agent setup` is the one-shot configuration step. It writes the
+daemon's `GlobalConfig`, allocates a free port (or uses the value you
+pass via `--port`), installs the launchd plist / systemd user unit so
+the daemon autostarts on login, and — if capture=yes — registers hooks
++ MCP config for the chosen coding CLIs.
+
+When capture=yes, hooks AND MCP config land at **project scope by
 default** — under `<cwd>/.<platform>/...` (`<cwd>/.claude/settings.json`,
 `<cwd>/.codex/hooks.json`, `<cwd>/.gemini/settings.json`, plus
 `<cwd>/.mcp.json` for Claude). Hooks at this scope only fire when the
 coding CLI is launched from this directory, so prompts captured here
 **never leak into other projects**.
 
-This means: `cd` into a project directory **first**. Each project
-where you want capture must run its own `gosh agent setup`. The
-`gosh agent setup` command refuses to run from filesystem root with
-a hard error, since neither project-rooted hooks nor `<cwd>/.mcp.json`
-work from `/`.
+That means: `cd` into a project directory **first** when capture=yes.
+Each project where you want capture must run its own `gosh agent
+setup`. The command refuses to run from filesystem root with a hard
+error, since neither project-rooted hooks nor `<cwd>/.mcp.json` work
+from `/`.
 
 ```
 mkdir -p ~/my-project && cd ~/my-project
 gosh agent setup \
-    --platform claude --platform codex --platform gemini \
-    --key <namespace> --instance <agent-name> --swarm <swarm-name>
+    --instance <agent-name> \
+    --key <namespace> --swarm <swarm-name> \
+    --platform claude --platform codex --platform gemini
 ```
 
-`--platform` is repeatable; setup configures only the CLIs found in
-`PATH` and silently skips the rest. Pass only the platforms you
-actually use (or list all three).
+`--platform` is repeatable and only used when capture=yes. Setup
+configures only the CLIs found in `PATH` and silently skips the rest;
+pass only the platforms you actually use (or list all three). For
+**capture=no**, omit every `--platform` flag — no hooks land, the
+daemon still autostarts.
 
-`--scope` controls where hooks AND MCP config land:
+`--scope` controls where hooks AND MCP config land (only relevant when
+`--platform` is passed):
 
 - **`project`** (default) — writes under `<cwd>/.<platform>/...`.
   Each project directory needs its own `gosh agent setup`. For Claude
@@ -529,71 +547,87 @@ actually use (or list all three).
 > stay intact. You don't need to manually clean up `~/.claude/...`
 > when switching from `--scope user` to `--scope project` (or back).
 
-The output ends with a line like:
+When capture=yes and `--swarm` was passed, the output ends with:
 ```
 Capture scope: swarm-shared (swarm: <swarm-name>)
 ```
-
-If it instead says `agent-private`, you forgot `--swarm` — re-run with
-the swarm flag to share facts cross-agent.
+If it says `agent-private`, you forgot `--swarm` — re-run with the
+swarm flag to share facts cross-agent.
 
 For Claude Code with the default project scope: launch `claude` once
 from this directory and accept the "Trust this MCP server?" prompt.
-Codex and Gemini auto-trust.
+Codex and Gemini auto-trust. The MCP server name surfaced to the CLI
+is `gosh-memory-<agent-name>` — you'll use it when telling the LLM to
+call memory tools (e.g. `gosh-memory-myagent.memory_recall`). The
+chain is: coding CLI → agent's stdio mcp-proxy → daemon `:<port>/mcp`
+→ memory `:8765/mcp`.
 
-The MCP server name surfaced to the CLI is `gosh-memory-<agent-name>`
-— you'll use it when telling the LLM to call memory tools (e.g.
-`gosh-memory-myagent.memory_recall`). Behind that name is `gosh-agent`'s
-own MCP-proxy (default port `8767`) which the coding CLI talks to;
-the proxy in turn forwards to the memory server on port `8765`. So
-the user-visible chain is: coding CLI → agent proxy `:8767` → memory
-`:8765/mcp`.
+#### Optional: enable autonomous task watching
 
-### Step 5 — Start headless agent (only if Q3 = 2 or 3)
+If the user explicitly wants the daemon to pull tasks from a courier
+subscription (the old "headless autonomous worker" mode), add the
+watch flags to the same `gosh agent setup` invocation:
 
 ```
-gosh agent start --instance <agent-name> --watch \
+gosh agent setup --instance <agent-name> [--platform … if capture=yes] \
+    --watch \
     --watch-key <namespace> \
     --watch-swarm-id <swarm-name> \
     --watch-agent-id <agent-name> \
     --watch-budget <usd>
 ```
 
-Confirm with `gosh agent start --help` — flag set may have additions
-in newer versions. Verify the process is running before continuing.
-
 `--watch-budget` is a **USD-denominated approximate spend cap** for
-provider tokens consumed by the agent's reasoning (default `10.0` if
-omitted). Cost is accounted from the per-profile `pricing` block in
-the memory config. When the cap is reached the agent stops picking
-up new work; pick a small float for the smoke test (e.g. `1.0`) so a
-runaway loop can't drain a real budget.
+provider tokens consumed by the agent's reasoning (default `10.0`).
+Pick a small float for the smoke test (e.g. `1.0`) so a runaway loop
+can't drain a real budget.
 
-> **Critical:** `--watch-key` / `--watch-swarm-id` / `--watch-agent-id`
-> *must* match the `--key`, `--swarm-id`, `--agent-id` used when
-> tasks are created. Mismatch is the most common reason an autonomous
-> agent silently never picks up work.
+> **Critical when watch is on:** `--watch-key` / `--watch-swarm-id` /
+> `--watch-agent-id` *must* match the `--key`, `--swarm-id`,
+> `--agent-id` used when tasks are created. Mismatch is the most
+> common reason an autonomous agent silently never picks up work.
 
-Operational commands once it's running:
+Setup writes these into `GlobalConfig` and the autostart-relaunched
+daemon picks them up. To turn watching back off later: re-run
+`gosh agent setup --no-watch`.
 
-- `gosh agent status` — process state.
-- `gosh agent stop` — graceful stop (counterpart to `start`).
+#### Daemon lifecycle
+
+The autostart artifact normally handles bring-up; the explicit
+process-lifecycle commands are there for self-supervised installs
+(`--no-autostart`) or quick restarts:
+
+- `gosh agent status` — process state, configured host:port, watch
+  settings (read straight from `GlobalConfig`).
+- `gosh agent start` / `gosh agent stop` / `gosh agent restart` —
+  manual lifecycle. `restart` is convenient after re-running setup
+  with new flags on a self-supervised install.
 - `gosh agent logs` — daemon logs (lands at
   `~/.gosh/run/agent_<name>.log`; `gosh-agent`'s tracing output goes
   here too).
 - `gosh agent task list` — see what's queued / in-flight / done.
 - `gosh agent instance list` / `gosh agent instance use <name>` — when
   you have more than one agent identity on this machine.
+- `gosh agent uninstall` — full teardown when you're done with an
+  instance (stops daemon, removes autostart artifact, hooks/MCP,
+  per-instance state, keychain entry, instance config). Idempotent.
 
 If the daemon dies on launch with no obvious error, tail
 `~/.gosh/run/agent_<name>.log` directly — that's where stdout and
 stderr from the spawned process land.
 
-### Step 6 — Smoke test (see "Smoke test" section)
+### Step 5 — Smoke test (see "Smoke test" section)
 
-Per Q3 role: round-trip through the coding CLI (Q3=1 or 3), or the
-`gosh agent task …` flow (Q3=2 or 3), or a direct API curl example
-(Q2=3).
+What to run depends on the capture answer plus whether watch was
+enabled:
+
+- **capture=yes** → round-trip through the coding CLI (capture probe).
+- **watch=yes** → `gosh agent task …` flow (autonomous pickup).
+- **Q2=3 (no agent)** → direct-API curl example.
+
+Either one of capture/watch is sufficient — you don't need both for
+quickstart. Use whichever matches the user's primary intent; the
+other is exercised in scenarios.
 
 ---
 
@@ -693,10 +727,10 @@ from source: clone `gosh.cli`, `cargo build --release`, move
 > memory by calling those subcommands from the cli with the admin
 > context the install gave you. Smoke goes through whatever identity
 > the playbook already established: the coding CLI's `gosh-agent`
-> MCP-proxy if Q3 = 1 (capture), or `gosh agent task …` if Q3 = 2
-> (headless), or both if Q3 = 3.
+> MCP-proxy when capture=yes, or `gosh agent task …` when watch was
+> enabled at setup. Either is sufficient.
 
-### If Q3 = 1 or 3 (capture configured) — round-trip through the coding CLI
+### If capture=yes — round-trip through the coding CLI
 
 1. Open a session of the wired coding CLI (Claude Code / Codex /
    Gemini). Seed a **declarative fact** anchored on common-noun
@@ -744,7 +778,7 @@ If the marker isn't found, do not retry blindly. Diagnose:
   fact is in the list, capture worked and only recall ranking is
   failing; rephrase the probe to mirror the seed wording.
 
-### If Q3 = 2 or 3 (headless configured) — `gosh agent task …`
+### If watch=yes (autonomous task pickup) — `gosh agent task …`
 
 1. Create a small task referencing the `--key` the agent watches.
    **Pass `--scope swarm-shared` explicitly** — the CLI default
@@ -809,8 +843,9 @@ Do not advertise a data round-trip when the user only has
 After the smoke test passes, summarise the resulting environment for
 the user:
 
-- The four discovery answers (Q1 / Q2 / Q3 / Q4) and a one-line "why
-  this fits" summary based on what the user told you.
+- The three discovery answers (Q1 / Q2 / Q3) plus the capture
+  follow-up answer, and a one-line "why this fits" summary based on
+  what the user told you.
 - Where `gosh` is installed and its version (`gosh --version`).
 - Memory endpoint URL and where the server token is stored.
 - Which secrets are configured (names only; never echo values).

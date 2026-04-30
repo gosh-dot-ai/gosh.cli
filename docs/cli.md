@@ -826,7 +826,9 @@ gosh agent instance use beta
 
 ### `gosh agent create`
 
-Creation and provisioning of a new agent. **This is the first step** — run before `setup` and `start`.
+Identity provisioning for a new agent. **First step.** After this you run
+`gosh agent setup` (which writes the daemon's `GlobalConfig`, including
+host/port and watch settings) and then `gosh agent start`.
 
 ```
 gosh agent create <NAME> [OPTIONS]
@@ -836,42 +838,34 @@ Options:
   --swarm <SWARM>           Add to swarm (repeatable)
   --binary <PATH>           Path to gosh-agent binary (optional — see "Binary
                             resolution" below)
-  --port <PORT>             Listen port (optional — `agent start` auto-
-                            allocates if unset)
-  --host <HOST>             Listen address (optional — `agent start`
-                            defaults to 127.0.0.1 if unset)
 ```
 
 **Note:** `create` is the only command with a positional `<NAME>`, since it creates a new instance. After creation it becomes the current one.
 
+**Identity-only contract.** Post-MCP-unification, `create` no longer
+takes `--host` / `--port`. Those (and every other daemon-spawn knob —
+watch, watch_*, poll-interval, autostart) belong to `gosh agent setup`,
+which is the canonical writer of the daemon's `GlobalConfig`. The
+split keeps responsibilities clean: `create` provisions a memory
+principal + keychain entry, `setup` configures the running daemon.
+
 **Binary resolution.** `--binary` is **optional**. Two flows:
 
 1. _Create + run on the same machine_ — pass `--binary <PATH>`; it gets stored
-   in the instance config and reused by `agent start`.
+   in the instance config and reused by `agent setup` / `agent start`.
 2. _Create on a memory host, run elsewhere_ ("admin export" flow) — omit
    `--binary`. The binary path is recorded as unset in the config, and the
    bootstrap file you export carries no path either. The receiving machine
    resolves its own binary at `agent setup` / `agent start` time via its own
    `--binary` flag or PATH.
 
-Resolution order in `agent start` and `agent setup` is unified: explicit
-`--binary` flag → `cfg.binary` from create → `which gosh-agent` in PATH.
+Resolution order is unified across `agent start` and `agent setup`:
+explicit `--binary` flag → `cfg.binary` from create → `which gosh-agent`
+in PATH.
 
-**Host/port resolution.** `--host` and `--port` are likewise optional. Two flows:
-
-1. _Create + run locally_ — pass either or both; values get stored in the
-   instance config and reused by `agent start`.
-2. _Create on a memory host, run elsewhere_ ("admin export" flow) — omit
-   both. They never enter the bootstrap file (the receiver allocates its
-   own at `agent import` time). On the create-host, `agent start` resolves
-   defaults at start time (`127.0.0.1` for host, first free port for port)
-   and persists them back to cfg so subsequent `agent task` / `status`
-   commands see the same values.
-
-**Validation:** Rejects if an agent with the same name already exists, or if
-**both** `--host` and `--port` are explicit and the host:port combination
-is already used by another memory or agent instance. With either side
-unset, no preemptive conflict check — `agent start` resolves at start time.
+**Validation:** Rejects if an agent with the same name already exists.
+Port conflicts are checked at `gosh agent setup` time, where allocation
+actually happens.
 
 **Flow:**
 1. Creates principal `agent:{name}` in memory (via admin token)
@@ -885,22 +879,19 @@ unset, no preemptive conflict check — `agent start` resolves at start time.
    ```toml
    name = "alpha"
    memory_instance = "local"
-   host = "127.0.0.1"                       # omitted when --host not passed
-   port = 8767                              # omitted when --port not passed
    binary = "/usr/local/bin/gosh-agent"     # omitted when --binary not passed
    created_at = "2026-04-08T..."
    ```
 9. Sets as current agent (`~/.gosh/agent/current`)
 10. Outputs:
-   ```
-   ✓ Agent "alpha" created (principal: agent:alpha)
-   ✓ Keypair generated, public key registered in memory
-   ✓ Credentials saved to OS keychain
-   ✓ Set as current agent
+    ```
+    ✓ Agent "alpha" created (principal: agent:alpha)
+    ✓ Keypair generated, public key registered in memory
+    ✓ Credentials saved to OS keychain
+    ✓ Set as current agent
 
-   Next: gosh agent setup
-   Then: gosh agent start
-   ```
+    Next: gosh agent setup [--host H] [--port P] [--watch ...]
+    ```
 
 ### `gosh agent import`
 
@@ -910,12 +901,13 @@ Import an agent from a bootstrap file (created by `gosh agent bootstrap export` 
 gosh agent import <BOOTSTRAP_FILE> [OPTIONS]
 
 Options:
-  --port <PORT>             Listen port (default: auto-allocate)
-  --host <HOST>             Listen address (default: 127.0.0.1)
   -f, --force               Overwrite an existing local agent of the same name (re-import)
 ```
 
 The agent name is derived from `principal_id` in the join token — no `--name` needed.
+
+Like `agent create`, `import` is identity-only — host/port allocation
+and every other daemon-spawn knob land at `gosh agent setup` time.
 
 Does not require a configured memory instance. All credentials come from the bootstrap file.
 
@@ -926,16 +918,13 @@ Does not require a configured memory instance. All credentials come from the boo
 4. Writes agent instance config (no `memory_instance` — marks it as imported):
    ```toml
    name = "myagent"
-   host = "127.0.0.1"
-   port = 8767
    created_at = "2026-04-14T..."
    ```
 5. Sets as current agent
 
 ```bash
 gosh agent import ./bootstrap.json
-gosh agent setup --platform claude
-gosh agent start
+gosh agent setup --platform claude --port 8770
 ```
 
 **Collision:** If a local agent with the same name already exists, the
@@ -955,21 +944,56 @@ Configures the local machine for a specific agent: discovers coding CLIs (Claude
 gosh agent setup [OPTIONS]
 
 Options:
-  --memory <INSTANCE>     Memory instance to connect to (default: current)
-  --binary <PATH>         Path to gosh-agent binary; resolved as
-                          --binary → cfg.binary → PATH
-  --key <KEY>             Memory namespace key (overrides git-based auto-detection)
-  --swarm <SWARM>         Swarm ID for captured data (enables swarm-shared scope)
-  --platform <PLATFORM>   Limit to specific CLIs (repeatable: claude, codex, gemini).
-                          If omitted, all detected CLIs are configured.
-  --scope <SCOPE>         Where hooks AND MCP config land. `project` (default)
-                          writes under `<cwd>/.<platform>/...` so capture only
-                          fires when the coding CLI is launched from this dir
-                          — privacy-safe (no leakage into other projects).
-                          `user` writes under `~/.<platform>/...` so capture
-                          fires for every session of that coding CLI on this
-                          machine (rare; opt-in only). Codex MCP is always
-                          user-global regardless of scope (upstream limitation).
+  --memory <INSTANCE>            Memory instance to connect to (default: current)
+  --binary <PATH>                Path to gosh-agent binary; resolved as
+                                 --binary → cfg.binary → PATH
+  --key <KEY>                    Memory namespace key (overrides git-based auto-detection)
+  --swarm <SWARM>                Swarm ID for captured data (enables swarm-shared scope)
+  --platform <PLATFORM>          Limit to specific CLIs (repeatable: claude, codex, gemini).
+                                 If omitted, all detected CLIs are configured.
+  --scope <SCOPE>                Where hooks AND MCP config land. `project` (default)
+                                 writes under `<cwd>/.<platform>/...` so capture only
+                                 fires when the coding CLI is launched from this dir
+                                 — privacy-safe (no leakage into other projects).
+                                 `user` writes under `~/.<platform>/...` so capture
+                                 fires for every session of that coding CLI on this
+                                 machine (rare; opt-in only). Codex MCP is always
+                                 user-global regardless of scope (upstream limitation).
+
+  Daemon-spawn config (single source of truth — `gosh agent start` does
+  not take any of these. Each Option-typed flag patches GlobalConfig
+  only when present; re-run setup with a subset to update just those):
+
+  --host <HOST>                  Daemon HTTP bind host (default: 127.0.0.1)
+  --port <PORT>                  Daemon HTTP bind port (default: 8767)
+  --watch                        Enable watch mode (auto-pick up tasks).
+                                 Mutually exclusive with --no-watch.
+  --no-watch                     Disable watch mode. Mutually exclusive with --watch.
+  --watch-key <KEY>              Namespace key the watcher subscribes to
+  --watch-swarm-id <SWARM>       Swarm filter for the watcher subscription
+                                 (alias: --watch-swarm)
+  --watch-agent-id <AGENT>       Agent-id filter for the watcher
+                                 (default: derived from principal_id)
+  --watch-context-key <KEY>      Context retrieval namespace, distinct from
+                                 --watch-key when an agent watches one
+                                 namespace and recalls context from another
+  --watch-budget <N>             USD budget cap for autonomous task execution
+  --poll-interval <SECS>         Polling interval (seconds) for the watcher
+                                 loop fallback when courier SSE is unavailable
+  --no-autostart                 Skip writing the launchd / systemd autostart
+                                 artifact. The operator supervises the daemon
+                                 themselves (docker-compose, runit, supervisord).
+  --no-oauth-dcr                 Disable Dynamic Client Registration on the
+                                 daemon's `/oauth/register` endpoint. By default
+                                 DCR is on (RFC 7591 — Claude.ai self-registers
+                                 from Name + URL alone); with this flag set,
+                                 operators must register clients explicitly via
+                                 `gosh agent oauth clients register --name <X>
+                                 --redirect-uri <URI>` (see that command's docs
+                                 for the canonical Claude.ai callback value).
+                                 Same shape as `--no-autostart`: setup declares
+                                 desired state every run, so re-running setup
+                                 without the flag re-enables DCR.
 ```
 
 Without `--swarm`, capture stores data with `agent-private` scope (only the agent can see it).
@@ -986,6 +1010,19 @@ With `--swarm`, capture uses `swarm-shared` scope — all swarm members can see 
 > and MCP entries are removed from the opposite scope so the previous
 > install doesn't keep firing in the background. Migration is per-agent —
 > other agents' entries are left alone.
+
+> **Pre-unification upgrade migration.** If your agent instance was
+> created with a CLI version that stored daemon-spawn knobs (`host`,
+> `port`, `watch`, `watch_*`, `poll_interval`) inline on the per-instance
+> record, `gosh agent setup` reads those values as fallback when the
+> corresponding flag is omitted *and* `GlobalConfig` doesn't have them
+> yet. Resolution priority is: explicit CLI flag → existing
+> `GlobalConfig` → legacy instance record → built-in default. After a
+> successful run the legacy fields are cleared from the instance record
+> and re-saved, so future setups see a clean file. Idempotent — instances
+> that never had legacy fields take the no-op branch. Practical effect:
+> after upgrading, run `gosh agent setup` once with no flags — your
+> previous host/port/watch settings carry over without re-typing.
 
 ```bash
 # Configure all detected CLIs at project scope (default, agent-private capture)
@@ -1017,25 +1054,56 @@ gosh agent setup --platform codex
 1. Resolves agent instance (from `--instance` or current)
 2. Determines the memory instance (URL, tokens from keychain)
 3. Delegates to `gosh-agent setup --name {agent}` with the required parameters
-4. Creates per-instance config `~/.gosh/agent/state/{name}/config.toml`
+4. Creates / patches per-instance config `~/.gosh/agent/state/{name}/config.toml`
 5. Discovers installed CLIs, filters by `--platform` if specified
 6. Registers per-agent capture hooks and MCP proxy for selected CLIs
+7. Writes (or refreshes) the autostart artifact (launchd plist / systemd
+   user unit) and reload-loads it so the running daemon picks up
+   GlobalConfig changes immediately. `--no-autostart` skips this for
+   operators who supervise the daemon themselves.
 
 **Agent lifecycle:**
 
-Steps `setup` and `start` are independent — use what you need:
+After this redesign `gosh agent setup` is the single source of truth
+for daemon-spawn config. `start`/`stop`/`restart` are pure
+process-lifecycle:
 
-- **`setup`** — integrates with coding CLIs (hooks + MCP proxy)
-- **`start`** — runs headless server (accepts tasks via API/courier)
+- **`setup`** — writes config, integrates with coding CLIs (hooks + MCP
+  proxy), installs autostart artifact (idempotent: re-running picks up
+  config changes)
+- **`start`** / **`stop`** / **`restart`** — process lifecycle only;
+  daemon reads everything else from `~/.gosh/agent/state/<name>/config.toml`
+- **`uninstall`** — full teardown (autostart + hooks/MCP + state +
+  keychain + instance config)
 
 | Flow | Use case |
 |------|----------|
-| `create` → `setup` | Coding CLI integration only (no background server) |
-| `create` → `start` | Headless agent only (tasks via API, no CLI hooks) |
-| `create` → `setup` → `start` | Full: CLI hooks + headless server |
-| `import` → `setup` | Remote agent, coding CLI integration only |
-| `import` → `start` | Remote agent, headless only |
-| `import` → `setup` → `start` | Remote agent, full setup |
+| `create` → `setup` | Default — autostart installs the daemon; coding-CLI integration if a CLI is detected |
+| `create` → `setup --no-autostart` → `start` | Self-supervised (docker-compose / runit / etc.) |
+| `import` → `setup` | Remote agent, full setup |
+| `import` → `setup --no-autostart` → `start` | Remote agent, self-supervised |
+
+**Autostart caveats (when the autostart artifact won't bring the daemon
+up the way you want, pass `--no-autostart` and supervise yourself):**
+
+- **macOS**: the launchd plist installs into the user's GUI session
+  domain (`gui/$(id -u)`). That domain only exists when there's an
+  active GUI login — fine for a workstation, broken on a headless mac
+  (CI runner, server with no console login). On those hosts, pass
+  `--no-autostart` and run the daemon under your own supervisor
+  (launchd `system/`-domain LaunchDaemon, runit, supervisord, …) or
+  start it manually via `gosh agent start`.
+
+- **Linux**: the systemd user unit needs *lingering* enabled for the
+  user (`loginctl enable-linger $USER`, requires sudo) so the unit
+  starts on boot without an interactive login. Setup prints a hint
+  when lingering is off. Without lingering the unit still works
+  during an active login session but won't auto-start on reboot — if
+  that's enough for you, ignore the hint; if you need boot-time
+  startup, run the suggested `loginctl` command once.
+
+- **Windows / other**: no native autostart artifact today. Pass
+  `--no-autostart` and supervise yourself.
 
 ### `gosh agent start`
 
@@ -1043,61 +1111,98 @@ Steps `setup` and `start` are independent — use what you need:
 gosh agent start [OPTIONS]
 
 Options:
-  --watch                         Enable watch mode (auto-pick up tasks)
-  --watch-key <KEY>               Namespace key to watch
-  --watch-context-key <KEY>       Retrieval context key (defaults to watch-key if omitted)
-  --watch-agent-id <AGENT>        Agent id to target in watch mode
-  --watch-swarm-id <SWARM>        Swarm id to watch (alias: --watch-swarm)
-  --watch-budget <N>              Budget per watched task (default: 10.0)
-  --poll-interval <SECS>          Poll interval for watch mode fallback (default: 30)
   --binary <PATH>                 Path to gosh-agent binary; resolved as
                                   --binary → cfg.binary → PATH
 ```
 
-Watch mode is enabled when `--watch` is passed on the CLI or when the saved config
-has `watch = true` from a previous start. `--watch-key` and `--watch-swarm-id`
-are required for watch mode but can come from saved config — they don't have to
-be specified on every start.
+Pure process-lifecycle: spawns `gosh-agent serve --name <name>` and
+nothing else. Watch / host / port / budget / poll-interval all live in
+`GlobalConfig` now — to change any of them, re-run `gosh agent setup`
+(which also kicks the supervised daemon). For manually-supervised
+daemons (`--no-autostart` installs), use `gosh agent restart` after a
+config change.
 
-Without `--watch`, the agent runs as a passive MCP server (tasks are triggered
-via `agent_start` tool).
-
-**Settings resolution:** CLI args override saved config. Saved config provides
-fallback defaults. This means you can specify watch params once on the first start
-and omit them on subsequent starts.
-
-Runtime params are saved to the instance config on every start. This enables:
-- `gosh agent status` to display current watch configuration
-- `gosh agent bootstrap rotate` to restart the agent with the same params
-- `gosh agent instance list` to show watch state per agent
-
-**Note:** Watch scope is intentionally not part of `agent create` or `agent import`.
-The agent is a capability (identity + credentials + port); the work scope is the
-caller's decision at `start` time.
+**Requires `gosh agent setup` to have run first.** Without `GlobalConfig`
+the CLI doesn't know which port the daemon will listen on, so it errors
+loudly rather than guessing.
 
 **Flow:**
 1. Reads agent instance config (current or `--instance`)
-2. Reads from OS keychain: join_token, secret_key
-3. Saves runtime params to config (watch, key, swarm, budget, last_started_at)
-4. Writes bootstrap file (JSON with join_token + secret_key) to a temporary file (0600)
-5. Launches `gosh-agent serve --bootstrap-file <tmpfile> --host <host> --port <port> [--watch ...]`
-6. Deletes bootstrap file after health check
-7. Writes PID to `~/.gosh/run/agent_{name}.pid`
-8. Redirects logs to `~/.gosh/run/agent_{name}.log`
-9. Waits for health check
+2. Reads the daemon's `GlobalConfig` for host/port; errors with a
+   "run `gosh agent setup` first" message if it doesn't exist
+3. Sanity-checks the keychain entry has `join_token` + `secret_key` (so a missing entry surfaces as "re-provision" here, not as a cryptic daemon-startup error)
+4. Launches `gosh-agent serve --name <instance>`
+5. Writes PID to `~/.gosh/run/agent_{name}.pid`
+6. Redirects logs to `~/.gosh/run/agent_{name}.log`
+7. Waits for health check
 
 **Agent startup (inside gosh-agent serve):**
-1. Parses bootstrap file → extracts join_token + secret_key
-2. From join_token gets memory URL, transport token, principal token
-3. Starts MCP server and waits for tasks
-4. At task execution time: determines model from memory recall payload, resolves the needed API key from memory secret store (sealed-box encrypted), executes LLM call
-5. Fully stateless — nothing written to disk
+1. Loads the per-instance `~/.gosh/agent/state/<name>/config.toml` —
+   source of truth for `host`, `port`, `watch`, `watch_*`, `poll_interval`,
+   plus MCP-forwarding `key` / `swarm_id` defaults
+2. Reads `principal_token` / `join_token` / `secret_key` directly from the OS keychain (account `agent/<name>`, written by the CLI at `agent create` / `agent import` time)
+3. From join_token gets memory URL, transport token, principal token (CLI/env override of `--memory-auth-token` still wins if provided)
+4. Starts MCP server and waits for tasks
+5. At task execution time: determines model from memory plan-inference payload, resolves the needed API key from memory secret store (sealed-box encrypted), executes LLM call
+6. No credential bytes ever live on disk outside the OS keychain — there's no per-spawn ephemeral file
 
 ### `gosh agent stop`
 
 ```
 gosh agent stop
 ```
+
+### `gosh agent restart`
+
+```
+gosh agent restart [OPTIONS]
+
+Options:
+  --binary <PATH>          Path to gosh-agent binary; forwarded to
+                           `gosh agent start`.
+```
+
+Convenience for stop + start. Useful after `gosh agent setup` has
+rewritten `GlobalConfig` and a manually-supervised daemon
+(`--no-autostart` install) needs to pick up the new values. The
+autostart artifact does this automatically when setup re-runs, so
+`restart` is mainly for the self-supervised case.
+
+### `gosh agent uninstall`
+
+```
+gosh agent uninstall [OPTIONS]
+
+Options:
+  --binary <PATH>          Path to gosh-agent binary; resolved as
+                           --binary → cfg.binary → PATH. Required so the CLI
+                           can invoke `gosh-agent uninstall` for daemon-side
+                           cleanup.
+  --yes                    Skip the confirmation prompt.
+```
+
+Tear down an agent instance entirely. Idempotent — every step skips
+cleanly when its target is already gone, so re-running on a partial
+uninstall finishes the job.
+
+**What gets removed:**
+- The running daemon (stopped if alive).
+- The autostart artifact (launchd plist on macOS,
+  `~/.config/systemd/user/gosh-agent-<name>.service` on Linux).
+- This agent's hooks and MCP entries from claude / codex / gemini at
+  both user and project scopes (project scope = current cwd).
+- `~/.gosh/agent/state/<name>/` (config.toml + buffer/offset state).
+- The OS keychain entry (account `agent/<name>`).
+- The CLI-side `AgentInstanceConfig`
+  (`~/.gosh/agent/instances/<name>.toml`); the "current" pointer is
+  also cleared if it referenced this agent.
+
+Project-scope hook cleanup operates against the current working
+directory only — the CLI doesn't track which projects you ran
+`gosh agent setup` from. If you ran setup in multiple projects, run
+uninstall from each, or strip the leftovers manually
+(`<project>/.claude/`, `<project>/.codex/hooks.json`,
+`<project>/.gemini/settings.json`, `<project>/.mcp.json`).
 
 ### `gosh agent logs`
 
@@ -1178,13 +1283,16 @@ Output (JSON):
 
 Remote deployment:
 ```bash
-# On the machine with CLI:
+# On the source machine:
 gosh agent bootstrap export --file planner-bootstrap.json
 scp planner-bootstrap.json remote:/tmp/
 
-# On the remote machine:
-gosh-agent serve --bootstrap-file /tmp/planner-bootstrap.json --host 0.0.0.0 --port 8767
+# On the remote machine — gosh CLI is required, since the daemon
+# reads its credentials from the OS keychain (the CLI is the sole
+# writer):
+gosh agent import /tmp/planner-bootstrap.json   # writes keychain
 rm /tmp/planner-bootstrap.json
+gosh agent start --instance planner             # spawns gosh-agent serve --name planner
 ```
 
 #### `gosh agent bootstrap show`
@@ -1211,8 +1319,10 @@ gosh agent bootstrap rotate
 
 Issues a new principal token, generates a new keypair, registers
 the new public key in memory, reassembles the join bundle, saves to keychain.
-If the agent is running, stops it and restarts with the same parameters
-(watch mode, key, swarm, budget — read from the saved config).
+If the agent is running, stops it and re-spawns `gosh-agent serve --name
+<name>` — watch mode / key / swarm / budget / host / port all live in
+the daemon's `GlobalConfig`, so the daemon picks them up at startup
+without the CLI threading them through.
 
 ### `gosh agent task create`
 
@@ -1260,6 +1370,346 @@ Options:
   --key <KEY>
   --limit <N>
 ```
+
+### `gosh agent oauth`
+
+Manage the daemon's OAuth surface — clients today, sessions and tokens
+in later sub-commits. Talks to the daemon's localhost-only
+`/admin/oauth/*` paths via the per-instance admin token at
+`~/.gosh/agent/state/<name>/admin.token` (mode 0600), written by the
+daemon at startup. Daemon restart rotates the token transparently.
+
+#### `gosh agent oauth clients list`
+
+```
+gosh agent oauth clients list [--instance <NAME>]
+```
+
+Lists registered OAuth clients (DCR'd by Claude.ai + manually
+registered by the operator) with `client_id`, display name, source
+(`dcr` / `manual`), creation timestamp, and last-seen timestamp.
+Secrets are never echoed — the daemon stores only their hash.
+
+#### `gosh agent oauth clients register`
+
+```
+gosh agent oauth clients register --name <X> --redirect-uri <URI> \
+    [--redirect-uri <URI>]... [--instance <NAME>]
+```
+
+Manually register a new OAuth client. Returns plaintext `client_id`
+and `client_secret` exactly once — this is the only chance to
+capture the secret; the daemon stores only its hash thereafter.
+Paste both values into Claude.ai's "Add custom connector" form
+(Advanced settings) when DCR is off (`gosh agent setup
+--no-oauth-dcr`).
+
+`--redirect-uri` is required and repeatable. The daemon enforces
+exact-match against the registered set on every authorize call
+(RFC 6749 §3.1.2.3 + RFC 7591 §2), so a client registered without
+any URI can never complete the authorize flow — the CLI refuses
+to send such a request, and the daemon refuses to accept one.
+
+For the documented Claude.ai manual setup, pass the value Claude.ai
+actually advertises in DCR (verified empirically; see the 7e log
+in `specs/agent_mcp_unification.md`):
+
+```
+gosh agent oauth clients register \
+    --name claude-ai \
+    --redirect-uri https://claude.ai/api/mcp/auth_callback \
+    --instance <NAME>
+```
+
+Pass `--redirect-uri` multiple times to register more than one
+callback URL on the same client (e.g. one for prod, one for
+staging).
+
+#### `gosh agent oauth clients revoke`
+
+```
+gosh agent oauth clients revoke <CLIENT_ID> [--instance <NAME>]
+```
+
+Idempotent revoke. Re-running on an already-removed `client_id`
+returns `removed: false` with a friendly warning. Future commits
+add cascade revocation of issued tokens (7c) so revoking a client
+also kills its access / refresh tokens.
+
+#### `gosh agent oauth sessions list`
+
+```
+gosh agent oauth sessions list [--instance <NAME>]
+```
+
+Lists pending `/oauth/authorize` sessions — one per in-flight
+Claude.ai connector handshake. Each row shows `session_id`,
+`client_id`, status (`pending` / `approved` / `denied` /
+`consumed`), whether a PIN is currently active, expiry, and
+the redirect target. PIN values and authorization codes are
+never echoed.
+
+#### `gosh agent oauth sessions pin`
+
+```
+gosh agent oauth sessions pin <SESSION_ID> [--instance <NAME>]
+```
+
+Mint a 6-digit PIN for the given session. Valid for 5 minutes,
+one-time use. Re-running for the same session invalidates the
+prior PIN. The operator gets the `<SESSION_ID>` from the
+consent page Claude.ai opened in the browser — it's displayed
+verbatim with the exact CLI command to run.
+
+#### `gosh agent oauth sessions drop`
+
+```
+gosh agent oauth sessions drop <SESSION_ID> [--instance <NAME>]
+```
+
+Cancel a pending session. Useful when the consent page shows a
+session you don't recognise and want to drop before it's
+approved.
+
+#### `gosh agent oauth tokens list`
+
+```
+gosh agent oauth tokens list [--instance <NAME>]
+```
+
+Lists issued refresh-token records — one per remote OAuth
+client that completed the `/oauth/authorize` + `/oauth/token`
+exchange. Each row shows `token_id` (`tok_<8hex>` — the
+operator handle, **not** the actual `rt_…` secret), `client_id`,
+how many access tokens minted from this refresh are currently
+active, created/last-used timestamps, and optional scope. Access
+tokens never appear (1-hour TTL, in-memory only); refresh-token
+plaintext and on-disk hashes never appear either.
+
+#### `gosh agent oauth tokens revoke`
+
+```
+gosh agent oauth tokens revoke <TOKEN_ID> [--instance <NAME>]
+```
+
+Revoke a refresh token by `token_id` (from `oauth tokens list`).
+Cascades: drops every active access token minted from this
+refresh too — the connected client's next `/mcp` call hits 401
+`invalid_token` immediately, which is the operationally useful
+"boot the connected client" lever (without it the operator would
+have to wait up to one access-TTL window for the kick to take
+effect). Idempotent.
+
+**Supported chat clients.** The OAuth + MCP surface the daemon
+exposes (RFC 8414 metadata + RFC 7591 DCR + RFC 6749 / 7636
+authorize + Streamable-HTTP `/mcp`) is vendor-neutral by design.
+Verified empirically against:
+
+- **Claude.ai** (web/desktop) — Settings → Connectors → "Add custom
+  connector". Advertises `https://claude.ai/api/mcp/auth_callback`
+  as its DCR redirect URI; this is stable across all Claude.ai
+  installations.
+  "Import remote MCP server". Advertises a per-connector URI of the
+  shape `https://chatgpt.com/connector/oauth/<random-id>`; the
+  and is **not stable** across connector instances.
+
+flow is identical at the daemon level (same `/.well-known/...` →
+`/oauth/register` → `/oauth/authorize` → `/oauth/token` → `/mcp`
+Claude.ai canonical URI appears below.
+
+**Setting up the connector with DCR on (default):**
+
+1. `gosh agent setup --instance alpha` — daemon picks free port,
+   installs autostart, accepts DCR.
+2. In the chat client's connector form: enter Name + Remote MCP
+   server URL (e.g. `https://my-agent.example.com/mcp`); leave
+   `OAuth Client ID / Secret` empty. The chat client DCRs against
+   the daemon, gets credentials automatically.
+3. Click Add / Connect — the chat client opens the daemon's
+   `/oauth/authorize` in your browser. Daemon-side consent page
+   shows a `session_id` prominently.
+4. On the agent host:
+   `gosh agent oauth sessions pin <session_id>` — prints a
+   6-digit PIN (5-min TTL, one-time use).
+5. Type the PIN into the chat client's consent form, approve.
+   Daemon redirects back to the chat client with the authorization
+   code, and the connector is live.
+
+**Setting up the connector with DCR off:**
+
+1. `gosh agent setup --instance alpha --no-oauth-dcr`.
+2. `gosh agent oauth clients register --name claude-ai \
+       --redirect-uri https://claude.ai/api/mcp/auth_callback`.
+   Copy the printed `client_id` and `client_secret`. The
+   `--redirect-uri` value is required (the daemon enforces
+   exact-match against the registered set on every authorize
+   call) — `https://claude.ai/api/mcp/auth_callback` is the
+   value Claude.ai actually advertises in DCR; it is the
+   canonical setting for the manual Claude.ai flow.
+
+   connector-add time (not knowable in advance). Workflow: start
+   redirect URI it surfaces there, then run
+   `gosh agent oauth clients register --name chatgpt \
+       --redirect-uri https://chatgpt.com/connector/oauth/<random-id>`
+   and is the recommended posture.
+3. In the chat client's "Add custom connector" / "Import remote
+   MCP server" form, fill in Name + URL + paste the `client_id`
+   and `client_secret` into Advanced Settings.
+4. Continue at step 3 above (browser-side consent + PIN).
+
+### Exposing the agent to the internet
+
+The recipes above assume Claude.ai can reach `https://my-agent.example.com/mcp`.
+This section covers how to actually get there.
+
+**Why the daemon does NOT terminate TLS itself:** keeping the
+binary small + leaving cert handling to battle-tested fronts
+(Caddy, Cloudflare, Tailscale) is a deliberate split. Operator
+gets choice of HTTPS implementation, certificate-renewal story,
+DDoS posture, geo / ACL filtering — all of which are outside
+the agent's scope.
+
+**Two layers always required:**
+
+1. **Daemon must bind to a non-loopback address** so the TLS
+   frontend (running locally) — or external service (running
+   off-host) — can reach it:
+
+   ```
+   gosh agent setup --instance alpha --host 0.0.0.0 --port 8767
+   ```
+
+   On startup the daemon prints a prominent warning when
+   binding to a non-loopback address. That is expected.
+
+2. **A TLS terminator in front.** The daemon's
+   `/oauth/*` + `/mcp` surface is OAuth-Bearer-gated, but the
+   wire is plain HTTP — anyone on the path could read tokens
+   without TLS. Pick one of the recipes below.
+
+The Bearer middleware on `/mcp` and the `/admin/*` middleware
+both treat the presence of `X-Forwarded-For` /
+`X-Forwarded-Host` / `X-Forwarded-Proto` / `Forwarded` /
+`X-Real-IP` as a "request crossed a proxy boundary" signal —
+loopback bypass is gated on **both** loopback peer-IP **and**
+absence of those headers. A same-host TLS terminator forwarding
+from `127.0.0.1` will set them, and the request is correctly
+treated as remote (Bearer required for `/mcp`; admin paths
+refuse outright).
+
+#### Recipe A: Caddy (simplest)
+
+Best when you have a public DNS name pointing at the agent host
+and want automatic Let's Encrypt certificates. Single config
+file:
+
+```caddyfile
+my-agent.example.com {
+    reverse_proxy 127.0.0.1:8767 {
+        header_up X-Real-IP {remote_host}
+    }
+}
+```
+
+Caddy's `reverse_proxy` directive automatically sets
+`X-Forwarded-For`, `X-Forwarded-Proto`, and `X-Forwarded-Host`
+— no extra config needed. Caddy handles cert provisioning and
+renewal via Let's Encrypt or ZeroSSL.
+
+```sh
+sudo caddy run --config /etc/caddy/Caddyfile
+```
+
+In Claude.ai's "Add custom connector": Remote MCP server URL =
+`https://my-agent.example.com/mcp`. Continue with the OAuth
+flow above.
+
+#### Recipe B: cloudflared (no public IP needed)
+
+Best when the agent host doesn't have a public IP — laptop,
+NAT-boxed home machine, etc. Cloudflare Tunnel originates a
+connection from the host to Cloudflare's edge, so the agent
+gets an `*.example.com` URL without inbound port-forwarding.
+
+```sh
+cloudflared tunnel login
+cloudflared tunnel create gosh-agent-alpha
+cloudflared tunnel route dns gosh-agent-alpha agent.example.com
+cloudflared tunnel run --url http://127.0.0.1:8767 gosh-agent-alpha
+```
+
+Cloudflare adds standard `X-Forwarded-*` headers when
+proxying. The daemon sees forwarded requests and treats them
+as remote.
+
+In Claude.ai: `https://agent.example.com/mcp`.
+
+> Note on Cloudflare's WebSockets-only mode: MCP-over-HTTP
+> (Streamable HTTP) is plain POST/GET, not WebSocket. cloudflared's
+> default HTTP mode is what you want; don't enable
+> `--websocket` unless your specific MCP transport needs it.
+
+#### Recipe C: Tailscale Funnel
+
+Best when you already use Tailscale and want zero-trust access
+without any public-internet exposure path. Funnel makes a
+specific port reachable on a Tailscale-issued
+`*.ts.net` domain.
+
+```sh
+sudo tailscale serve https / proxy 127.0.0.1:8767
+sudo tailscale funnel 443 on
+```
+
+Tailscale handles TLS and adds forwarding headers. The
+agent's `https://<host>.<tailnet>.ts.net/mcp` URL goes into
+Claude.ai.
+
+> Tailscale Funnel requires the device be tagged for funnel
+> use and the tailnet's ACL allow it. See the Tailscale docs
+> for the one-time enrollment.
+
+#### Security checklist before going public
+
+- [ ] Daemon bound to **`--host 0.0.0.0`** (binds every interface,
+      including loopback). Verify via `ss -tlnp | grep 8767` or
+      the daemon's startup banner. **Single-interface binds
+      (`--host 192.168.1.50`, etc.) are not supported by the
+      same-host CLI control flows** — `gosh agent oauth …` and
+      `gosh agent task …` both go through the daemon's
+      loopback-only `/admin/*` and `/mcp` Bearer-bypass gates,
+      and a single-interface bind has no loopback listener for
+      them to reach. The CLI refuses with an actionable error
+      in that case rather than letting every command 401. If
+      you genuinely need single-interface remote-only
+      deployment, drive admin operations from the agent host's
+      own loopback (SSH in and use the daemon-side tools
+      directly).
+- [ ] TLS terminator in front. **Never** point Claude.ai
+      directly at `http://<public-ip>:8767/mcp` — Bearer tokens
+      flow over the wire and would be readable in transit.
+- [ ] Confirmed with `curl https://<public-url>/health` that
+      the frontend is forwarding correctly (should return
+      `{"status":"ok"}` over HTTPS).
+- [ ] Confirmed with `curl -i https://<public-url>/mcp` that
+      `/mcp` returns 401 + `WWW-Authenticate: Bearer` (i.e.
+      the OAuth gate is active and forwarded headers are
+      reaching the daemon).
+- [ ] Confirmed with `curl -i https://<public-url>/admin/oauth/clients`
+      that `/admin/*` returns 401 (i.e. admin paths are
+      refusing forwarded requests as designed). Admin must
+      stay loopback-direct only.
+- [ ] DCR posture deliberate: either DCR on (every Claude.ai
+      that knows the URL can register itself) and you're ok
+      with that, or DCR off + manual client registration
+      (`gosh agent oauth clients register --name <X>
+      --redirect-uri <URI>`) for tighter control over who can
+      authorize.
+- [ ] Considered who can issue PINs: anyone with file-system
+      access to `~/.gosh/agent/state/<name>/admin.token` can
+      mint PINs and approve any pending session. On a
+      multi-user host, `~/.gosh/agent/state/` should not be
+      world-readable (it's mode 0700 by default; verify).
 
 ---
 
@@ -1373,7 +1823,7 @@ CLI and agent archives are platform-specific. Memory images are bundled for both
 
 On every CLI command invocation, an async background check runs (throttled to once per 12 hours).
 
-- Queries `gosh-ai-cli/releases/latest` with a 2-second timeout
+- Queries `<gosh.cli>/releases/latest` with a 2-second timeout
 - If a newer version is available, prints a hint with the exact `curl ... install.sh | bash -s -- --version vX.Y.Z` command (running gosh can't safely overwrite its own binary, so install.sh runs as a separate process — see `gosh setup --help`)
 - On network error — silently skipped
 - State file: `~/.gosh/agent/last_update_check` (unix timestamp, atomic write)

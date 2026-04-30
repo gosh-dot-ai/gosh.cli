@@ -68,20 +68,28 @@ pub async fn run() -> Result<()> {
                 Ok(cfg) => {
                     let running = state::is_running("agent", name);
                     let s = if running { "running" } else { "stopped" };
-                    let w = if cfg.watch {
-                        format!(
+                    // Watch state lives in the daemon's GlobalConfig now —
+                    // see `commands::agent::list` for the matching read.
+                    let daemon = crate::commands::agent::read_daemon_config(name);
+                    let w = match daemon.as_ref() {
+                        Some(d) if d.watch => format!(
                             "on (key:{} context:{} agent:{} swarm:{} budget:{})",
-                            cfg.watch_key.as_deref().unwrap_or("-"),
-                            cfg.watch_context_key.as_deref().unwrap_or("-"),
-                            cfg.watch_agent_id.as_deref().unwrap_or("-"),
-                            cfg.watch_swarm_id.as_deref().unwrap_or("-"),
-                            cfg.watch_budget.map(|b| b.to_string()).unwrap_or("-".into()),
-                        )
-                    } else {
-                        "off".to_string()
+                            d.watch_key.as_deref().unwrap_or("-"),
+                            d.watch_context_key.as_deref().unwrap_or("-"),
+                            d.watch_agent_id.as_deref().unwrap_or("-"),
+                            d.watch_swarm_id.as_deref().unwrap_or("-"),
+                            d.watch_budget.map(|b| b.to_string()).unwrap_or("-".into()),
+                        ),
+                        Some(_) => "off".to_string(),
+                        None => "?".to_string(),
                     };
+                    let p = daemon
+                        .as_ref()
+                        .and_then(|d| d.port)
+                        .map(|p| p.to_string())
+                        .unwrap_or_else(|| "-".into());
                     (
-                        cfg.port.map(|p| p.to_string()).unwrap_or_else(|| "-".into()),
+                        p,
                         cfg.memory_instance.unwrap_or_else(|| "(imported)".into()),
                         s.to_string(),
                         w,

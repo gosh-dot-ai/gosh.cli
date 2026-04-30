@@ -109,7 +109,10 @@ pub async fn run(args: RotateArgs, ctx: &CliContext) -> Result<()> {
 
     if crate::process::state::is_running("agent", &cfg.name) {
         output::hint("restarting agent...");
-        // Re-target the same instance — cfg.name is authoritative.
+        // Re-target the same instance — cfg.name is authoritative. Watch
+        // / host / port live on the daemon's `GlobalConfig` now, so we
+        // just stop and re-spawn `gosh-agent serve --name <name>`; the
+        // daemon picks the saved values back up at startup.
         crate::commands::agent::stop::run(
             crate::commands::agent::stop::StopArgs {
                 instance_target: InstanceTarget { instance: Some(cfg.name.clone()) },
@@ -117,17 +120,9 @@ pub async fn run(args: RotateArgs, ctx: &CliContext) -> Result<()> {
             ctx,
         )
         .await?;
-        // Restart with the same params from last start (saved in config)
         crate::commands::agent::start::run(
             crate::commands::agent::start::StartArgs {
                 instance_target: InstanceTarget { instance: Some(cfg.name.clone()) },
-                watch: cfg.watch,
-                watch_budget: cfg.watch_budget,
-                watch_key: cfg.watch_key,
-                watch_context_key: cfg.watch_context_key,
-                watch_agent_id: cfg.watch_agent_id,
-                watch_swarm_id: cfg.watch_swarm_id,
-                poll_interval: cfg.poll_interval,
                 binary: cfg.binary.clone(),
             },
             ctx,

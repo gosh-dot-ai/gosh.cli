@@ -20,6 +20,19 @@ pub trait KeychainBackend: Send + Sync {
     fn load(&self, account: &str) -> Result<Option<String>>;
     fn save(&self, account: &str, value: &str) -> Result<()>;
     fn delete(&self, account: &str) -> Result<()>;
+
+    /// Filesystem root if this backend persists to disk; `None` for
+    /// non-fs backends (the OS keychain has no path concept).
+    /// Subprocess spawners that need the spawned binary to use the
+    /// same keychain store (e.g. `gosh agent start` →
+    /// `gosh-agent serve`) read this and pass it along via a
+    /// target-specific env var. The trait stays oblivious to the
+    /// env-var name itself — that contract belongs in the caller
+    /// (each spawned binary has its own naming, e.g.
+    /// `GOSH_AGENT_TEST_MODE_KEYCHAIN_DIR`).
+    fn fs_root(&self) -> Option<&std::path::Path> {
+        None
+    }
 }
 
 // ── OS Keychain backend (production) ──────────────────────────────────
@@ -96,6 +109,10 @@ impl KeychainBackend for FileKeychain {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
             Err(e) => Err(anyhow::anyhow!("failed to delete {}: {e}", path.display())),
         }
+    }
+
+    fn fs_root(&self) -> Option<&std::path::Path> {
+        Some(&self.dir)
     }
 }
 

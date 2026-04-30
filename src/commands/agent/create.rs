@@ -16,6 +16,14 @@ use crate::context::CliContext;
 use crate::keychain;
 use crate::utils::output;
 
+/// `gosh agent create <NAME>` — provisions identity only.
+///
+/// Creates the memory principal, issues a principal token, generates the
+/// X25519 keypair, registers the public key, and saves credentials to the
+/// OS keychain. Host/port and every other daemon-spawn knob live in the
+/// daemon's `GlobalConfig` — `gosh agent setup` is the canonical writer
+/// of that file. Want a non-default port? Pass `--port` to `setup`, not
+/// to `create`.
 #[derive(Args)]
 pub struct CreateArgs {
     /// Agent name
@@ -34,15 +42,6 @@ pub struct CreateArgs {
     /// flows on a memory host, leave it unset)
     #[arg(long)]
     pub binary: Option<String>,
-
-    /// Listen port (optional — `agent start` auto-allocates if unset)
-    #[arg(long)]
-    pub port: Option<u16>,
-
-    /// Listen address (optional — `agent start` defaults to 127.0.0.1 if
-    /// unset)
-    #[arg(long)]
-    pub host: Option<String>,
 }
 
 pub async fn run(args: CreateArgs, ctx: &CliContext) -> Result<()> {
@@ -62,13 +61,6 @@ pub async fn run(args: CreateArgs, ctx: &CliContext) -> Result<()> {
         Some(path) => Some(crate::process::launcher::resolve_binary("gosh-agent", Some(path))?),
         None => None,
     };
-
-    // Only check port conflict when both host and port are explicit. Without
-    // both, there is nothing concrete to clash with — `agent start` resolves
-    // defaults at start time.
-    if let (Some(host), Some(port)) = (args.host.as_deref(), args.port) {
-        crate::config::check_port_conflict(host, port)?;
-    }
 
     // Get memory client with admin token
     let kc = ctx.keychain.as_ref();
@@ -163,23 +155,21 @@ pub async fn run(args: CreateArgs, ctx: &CliContext) -> Result<()> {
 
     // 8. Write agent config
     let binary_was_set = binary.is_some();
-    let host_was_set = args.host.is_some();
-    let port_was_set = args.port.is_some();
     let config = AgentInstanceConfig {
         name: name.clone(),
         memory_instance: Some(mem_cfg.name.clone()),
-        host: args.host,
-        port: args.port,
         binary,
         created_at: Utc::now(),
-        watch: false,
-        watch_budget: None,
-        watch_key: None,
-        watch_context_key: None,
-        watch_agent_id: None,
-        watch_swarm_id: None,
-        poll_interval: None,
         last_started_at: None,
+        host: None,
+        port: None,
+        watch: None,
+        watch_key: None,
+        watch_swarm_id: None,
+        watch_agent_id: None,
+        watch_context_key: None,
+        watch_budget: None,
+        poll_interval: None,
     };
     config.save()?;
 
@@ -193,16 +183,10 @@ pub async fn run(args: CreateArgs, ctx: &CliContext) -> Result<()> {
     output::blank();
     if !binary_was_set {
         output::hint(
-            "binary path not set — run `agent start` / `agent setup` with --binary on the machine that will run the agent (or have gosh-agent on its PATH)",
+            "binary path not set — run `agent setup` / `agent start` with --binary on the machine that will run the agent (or have gosh-agent on its PATH)",
         );
     }
-    if !host_was_set || !port_was_set {
-        output::hint(
-            "host/port not set — `agent start` will pick defaults (127.0.0.1 / auto-allocate); receiver of bootstrap allocates its own",
-        );
-    }
-    output::hint("next: gosh agent setup");
-    output::hint("then: gosh agent start");
+    output::hint("next: gosh agent setup [--host H] [--port P] [--watch ...]");
     output::hint("for remote deployment: gosh agent bootstrap export");
 
     Ok(())
