@@ -83,7 +83,7 @@ pub async fn run(args: ImportArgs, ctx: &CliContext) -> Result<()> {
     MemoryInstanceConfig::set_current(name)?;
 
     output::success(&format!("Connected to memory server at {}", bundle.url));
-    output::success("Admin token saved to OS keychain");
+    output::success(&format!("Admin token saved to {}", kc.display_label()));
     output::success(&format!("Instance \"{name}\" is now active"));
     if bootstrap_consumed {
         output::blank();

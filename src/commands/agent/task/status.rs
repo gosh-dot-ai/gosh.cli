@@ -19,6 +19,10 @@ pub struct TaskStatusArgs {
     /// Namespace key
     #[arg(long)]
     pub key: Option<String>,
+
+    /// Swarm id for task lookup
+    #[arg(long = "swarm-id", alias = "swarm")]
+    pub swarm_id: Option<String>,
 }
 
 pub async fn run(args: TaskStatusArgs) -> Result<()> {
@@ -27,6 +31,9 @@ pub async fn run(args: TaskStatusArgs) -> Result<()> {
     let mut tool_args = json!({ "task_id": args.task_id });
     if let Some(key) = args.key {
         tool_args["key"] = json!(key);
+    }
+    if let Some(swarm_id) = args.swarm_id {
+        tool_args["swarm_id"] = json!(swarm_id);
     }
 
     let result = client.call_tool("agent_status", tool_args).await?;

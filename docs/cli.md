@@ -483,10 +483,44 @@ Config set fields:
 - `embedding_model` — model for embeddings (e.g., `text-embedding-3-large`)
 - `librarian_profile` — profile name for extraction
 - `profiles` — mapping of complexity level (1/2/3) to profile name for inference
-- `profile_configs` — configuration for each profile: `model` + `secret_ref`
+- `profile_configs` — configuration for each profile: API profiles use
+  `model` + `secret_ref`; local execution profiles use `backend = "local_cli"`
 - `embedding_secret_ref` — reference to secret for embedding API
 - `inference_secret_ref` — reference to secret for inference API
 - `secret_ref` — format: `{"name": "<secret_name>", "scope": "system-wide"}`
+
+Local execution backend example:
+
+```bash
+gosh memory config set --key myproject '{
+  "schema_version": 1,
+  "embedding_model": "text-embedding-3-large",
+  "librarian_profile": "extraction",
+  "profiles": {"1": "local_exec", "2": "local_exec", "3": "local_exec"},
+  "profile_configs": {
+    "extraction": {
+      "model": "gpt-4o-mini",
+      "secret_ref": {"name": "openai", "scope": "system-wide"}
+    },
+    "local_exec": {
+      "backend": "local_cli"
+    }
+  },
+  "embedding_secret_ref": {"name": "openai", "scope": "system-wide"},
+  "inference_secret_ref": {"name": "openai", "scope": "system-wide"}
+}'
+```
+
+`local_cli` is selected by memory per profile and executed by
+`gosh-agent` as a local subprocess. Memory does not store host-local binary
+paths, command arguments, context windows, or provider credentials for this
+mode. The agent resolves the local implementation on its own host, preferring
+`GOSH_LOCAL_CLI_BACKEND=claude|codex|gemini` when set and otherwise detecting
+the first supported CLI on `PATH`. Provider credentials must be available to
+that CLI through its normal login or environment. In this mode the agent sends
+one prompt and reads stdout; MCP tool calls are not available inside the local
+CLI execution. The agent log emits `execution backend selected
+backend=local_cli ...` for each task that takes this path.
 
 ---
 
@@ -947,8 +981,11 @@ Options:
   --memory <INSTANCE>            Memory instance to connect to (default: current)
   --binary <PATH>                Path to gosh-agent binary; resolved as
                                  --binary → cfg.binary → PATH
-  --key <KEY>                    Memory namespace key (overrides git-based auto-detection)
-  --swarm <SWARM>                Swarm ID for captured data (enables swarm-shared scope)
+  --key <KEY>                    Memory namespace key. When omitted, setup preserves
+                                 the saved key, or derives one for a new config.
+  --swarm <SWARM>                Swarm ID for captured data. When omitted, setup
+                                 preserves the saved swarm.
+  --no-swarm                     Clear the saved swarm and capture as agent-private.
   --platform <PLATFORM>          Limit to specific CLIs (repeatable: claude, codex, gemini).
                                  If omitted, all detected CLIs are configured.
   --scope <SCOPE>                Where hooks AND MCP config land. `project` (default)
@@ -980,6 +1017,9 @@ Options:
   --watch-budget <N>             USD budget cap for autonomous task execution
   --poll-interval <SECS>         Polling interval (seconds) for the watcher
                                  loop fallback when courier SSE is unavailable
+  --log-level <LEVEL>            Daemon log level: error, warn, info,
+                                 debug, trace. Persisted into GlobalConfig;
+                                 RUST_LOG still wins for one-off diagnostics.
   --no-autostart                 Skip writing the launchd / systemd autostart
                                  artifact. The operator supervises the daemon
                                  themselves (docker-compose, runit, supervisord).
@@ -996,8 +1036,10 @@ Options:
                                  without the flag re-enables DCR.
 ```
 
-Without `--swarm`, capture stores data with `agent-private` scope (only the agent can see it).
-With `--swarm`, capture uses `swarm-shared` scope — all swarm members can see captured data.
+When `--swarm` is omitted, setup preserves any saved swarm. With a saved
+swarm, capture stays `swarm-shared`; without one, capture uses
+`agent-private` scope. Use `--swarm <SWARM>` to set shared capture, or
+`--no-swarm` to clear the saved swarm and capture as agent-private.
 
 > **Per-project setup is required.** `gosh agent setup` configures the coding
 > CLI's hooks at the **current working directory**'s project scope by default.
@@ -1025,7 +1067,7 @@ With `--swarm`, capture uses `swarm-shared` scope — all swarm members can see 
 > previous host/port/watch settings carry over without re-typing.
 
 ```bash
-# Configure all detected CLIs at project scope (default, agent-private capture)
+# Configure all detected CLIs at project scope, preserving saved key/swarm
 cd ~/my-project
 gosh agent setup
 
@@ -1039,6 +1081,10 @@ gosh agent setup --platform claude --platform codex
 # capturing across ALL projects on this host (rare). Hooks fire for every
 # session of the chosen coding CLI on the machine.
 gosh agent setup --platform claude --scope user
+
+# Keep normal HTTP access/lifecycle logs, or temporarily increase detail
+gosh agent setup --log-level info
+gosh agent setup --log-level debug
 ```
 
 **Multi-agent per-platform example:**
@@ -1216,6 +1262,10 @@ Options:
   -n, --lines <N>    Number of lines to show (default: 50)
 ```
 
+Manual starts and autostart both write stdout/stderr to
+`~/.gosh/run/agent_<name>.log`, so this command shows the canonical
+daemon log regardless of how the process was launched.
+
 ### `gosh agent status`
 
 ```
@@ -1224,6 +1274,7 @@ $ gosh agent status
   Memory:        local
   Host:          127.0.0.1:8767
   Status:        running (pid: 12345)
+  Log level:     info
   Watch:         on
     key:         test
     context:     test-context
@@ -1359,6 +1410,7 @@ gosh agent task status <TASK_ID> [OPTIONS]
 
 Options:
   --key <KEY>
+  --swarm-id <SWARM>          Swarm id for task lookup (alias: --swarm)
 ```
 
 ### `gosh agent task list`
@@ -1368,6 +1420,7 @@ gosh agent task list [OPTIONS]
 
 Options:
   --key <KEY>
+  --swarm-id <SWARM>          Swarm id for task lookup (alias: --swarm)
   --limit <N>
 ```
 

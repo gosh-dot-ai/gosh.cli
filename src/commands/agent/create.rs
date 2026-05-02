@@ -20,7 +20,7 @@ use crate::utils::output;
 ///
 /// Creates the memory principal, issues a principal token, generates the
 /// X25519 keypair, registers the public key, and saves credentials to the
-/// OS keychain. Host/port and every other daemon-spawn knob live in the
+/// configured keychain. Host/port and every other daemon-spawn knob live in the
 /// daemon's `GlobalConfig` — `gosh agent setup` is the canonical writer
 /// of that file. Want a non-default port? Pass `--port` to `setup`, not
 /// to `create`.
@@ -178,7 +178,7 @@ pub async fn run(args: CreateArgs, ctx: &CliContext) -> Result<()> {
 
     output::success(&format!("Agent \"{name}\" created (principal: {principal_id})"));
     output::success("Keypair generated, public key registered in memory");
-    output::success("Credentials saved to OS keychain");
+    output::success(&format!("Credentials saved to {}", kc.display_label()));
     output::success("Set as current agent");
     output::blank();
     if !binary_was_set {

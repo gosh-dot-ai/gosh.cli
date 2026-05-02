@@ -17,6 +17,10 @@ pub struct TaskListArgs {
     #[arg(long)]
     pub key: Option<String>,
 
+    /// Swarm id for task lookup
+    #[arg(long = "swarm-id", alias = "swarm")]
+    pub swarm_id: Option<String>,
+
     /// Max results
     #[arg(long)]
     pub limit: Option<u32>,
@@ -28,6 +32,9 @@ pub async fn run(args: TaskListArgs) -> Result<()> {
     let mut tool_args = json!({});
     if let Some(key) = args.key {
         tool_args["key"] = json!(key);
+    }
+    if let Some(swarm_id) = args.swarm_id {
+        tool_args["swarm_id"] = json!(swarm_id);
     }
     if let Some(limit) = args.limit {
         tool_args["limit"] = json!(limit);

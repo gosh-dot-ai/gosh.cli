@@ -21,12 +21,13 @@ pub struct ShowArgs {
 pub async fn run(args: ShowArgs, ctx: &CliContext) -> Result<()> {
     let cfg = AgentInstanceConfig::resolve(args.instance_target.as_deref())?;
     let secrets = keychain::AgentSecrets::load(ctx.keychain.as_ref(), &cfg.name)?;
+    let keychain_label = ctx.keychain.display_label();
 
     output::kv("Agent", &cfg.name);
     output::kv("Memory instance", cfg.memory_instance.as_deref().unwrap_or("(imported)"));
-    output::kv("Principal token", &mask_token(secrets.principal_token.as_deref()));
-    output::kv("Join token", &mask_token(secrets.join_token.as_deref()));
-    output::kv("Secret key", &mask_token(secrets.secret_key.as_deref()));
+    output::kv("Principal token", &mask_token(secrets.principal_token.as_deref(), &keychain_label));
+    output::kv("Join token", &mask_token(secrets.join_token.as_deref(), &keychain_label));
+    output::kv("Secret key", &mask_token(secrets.secret_key.as_deref(), &keychain_label));
 
     Ok(())
 }

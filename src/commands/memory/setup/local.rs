@@ -85,7 +85,7 @@ pub async fn run(args: LocalArgs, ctx: &CliContext) -> Result<()> {
 
     std::fs::create_dir_all(&args.data_dir)?;
 
-    // Generate and store secrets in OS keychain (single entry)
+    // Generate and store secrets in the configured keychain (single entry)
     let secrets = keychain::MemorySecrets {
         encryption_key: Some(keychain::generate_hex_token()),
         bootstrap_token: Some(keychain::generate_base64_token()),
@@ -93,7 +93,8 @@ pub async fn run(args: LocalArgs, ctx: &CliContext) -> Result<()> {
         admin_token: None,
         agent_token: None,
     };
-    secrets.save(ctx.keychain.as_ref(), name)?;
+    let kc = ctx.keychain.as_ref();
+    secrets.save(kc, name)?;
 
     let url = format!("http://{}:{}", args.host, args.port);
 
@@ -119,9 +120,10 @@ pub async fn run(args: LocalArgs, ctx: &CliContext) -> Result<()> {
     MemoryInstanceConfig::set_current(name)?;
 
     output::success(&format!("Memory instance \"{name}\" initialized"));
-    output::success("Encryption key saved to OS keychain");
-    output::success("Bootstrap token saved to OS keychain");
-    output::success("Server token saved to OS keychain");
+    let keychain_label = kc.display_label();
+    output::success(&format!("Encryption key saved to {keychain_label}"));
+    output::success(&format!("Bootstrap token saved to {keychain_label}"));
+    output::success(&format!("Server token saved to {keychain_label}"));
     output::blank();
     output::hint("run `gosh memory start` to start the server");
 

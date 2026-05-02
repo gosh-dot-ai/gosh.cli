@@ -105,8 +105,9 @@ pub async fn run(args: ImportArgs, ctx: &CliContext) -> Result<()> {
         join_token: Some(bootstrap.join_token),
         secret_key: Some(bootstrap.secret_key),
     };
-    secrets.save(ctx.keychain.as_ref(), agent_name)?;
-    output::success("Credentials saved to OS keychain");
+    let kc = ctx.keychain.as_ref();
+    secrets.save(kc, agent_name)?;
+    output::success(&format!("Credentials saved to {}", kc.display_label()));
 
     // 7. Write agent instance config (identity only — host/port/watch
     // belong to GlobalConfig and get written by `gosh agent setup`).

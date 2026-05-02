@@ -109,6 +109,8 @@ pub struct DaemonConfigSnapshot {
     pub watch_budget: Option<f64>,
     #[serde(default)]
     pub poll_interval: Option<u64>,
+    #[serde(default)]
+    pub log_level: Option<String>,
 }
 
 /// Path of the daemon's per-instance GlobalConfig file.

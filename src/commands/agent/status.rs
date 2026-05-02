@@ -77,6 +77,12 @@ pub async fn run(args: StatusArgs, _ctx: &CliContext) -> Result<()> {
         output::kv("Status", "stopped");
     }
 
+    if let Some(level) = daemon_cfg.as_ref().and_then(|c| c.log_level.as_deref()) {
+        output::kv("Log level", level);
+    } else if daemon_cfg.is_some() {
+        output::kv("Log level", "info");
+    }
+
     // Watch mode info — read from the daemon's GlobalConfig rather than
     // from AgentInstanceConfig, which the CLI no longer mirrors.
     if let Some(daemon) = daemon_cfg.as_ref() {

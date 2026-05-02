@@ -35,10 +35,10 @@ pub async fn dispatch(args: BootstrapArgs, ctx: &CliContext) -> Result<()> {
     }
 }
 
-pub(crate) fn mask_token(token: Option<&str>) -> String {
+pub(crate) fn mask_token(token: Option<&str>, keychain_label: &str) -> String {
     match token {
-        Some(t) if t.len() > 14 => format!("{}...****  (OS keychain)", &t[..10]),
-        Some(t) => format!("{t}  (OS keychain)"),
+        Some(t) if t.len() > 14 => format!("{}...****  ({keychain_label})", &t[..10]),
+        Some(t) => format!("{t}  ({keychain_label})"),
         None => "not set".to_string(),
     }
 }

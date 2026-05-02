@@ -260,8 +260,9 @@ gosh-memory-myagent.memory_recall tool to check.
   `cd` into a project directory first.
 
 - **Recall returns no results.** A few common causes:
-  - Capture went to `agent-private` scope (default when `--swarm` is
-    omitted on `agent setup`). Re-run with `--swarm <swarm_id>`.
+  - Capture went to `agent-private` scope because this agent has no saved
+    swarm, or because setup was run with `--no-swarm`. Run setup with
+    `--swarm <swarm_id>` to store future capture as `swarm-shared`.
   - The fact's `entities` list is empty (librarian didn't recognize the
     seed value as an entity). Recall then has only embedding-similarity
     to go on, which is fragile. Re-seed with a common-noun-anchored fact

@@ -90,7 +90,7 @@ pub async fn run(args: ProvisionCliArgs, ctx: &CliContext) -> Result<()> {
 
     output::success(&format!("CLI agent provisioned (principal: {principal_id})"));
     output::success("Swarm 'cli' created and membership granted");
-    output::success("Agent token saved to OS keychain");
+    output::success(&format!("Agent token saved to {}", kc.display_label()));
     output::blank();
     output::hint("you can now use data commands: gosh memory data store, recall, ask, etc.");
 

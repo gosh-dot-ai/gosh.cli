@@ -28,16 +28,19 @@ pub struct SetupArgs {
     #[arg(long)]
     pub binary: Option<String>,
 
-    /// Memory namespace key (overrides git-based auto-detection).
-    /// If omitted, the agent derives the key from the git remote URL.
+    /// Memory namespace key. When omitted, setup preserves the saved key
+    /// if present; otherwise the agent derives one from the git remote URL.
     #[arg(long, value_parser = clap::builder::NonEmptyStringValueParser::new())]
     pub key: Option<String>,
 
     /// Swarm ID; presence switches capture scope from agent-private to
-    /// swarm-shared. Omitting clears any previously saved swarm (reverts to
-    /// agent-private).
-    #[arg(long, value_parser = clap::builder::NonEmptyStringValueParser::new())]
+    /// swarm-shared. Without this flag, setup preserves any saved swarm.
+    #[arg(long, conflicts_with = "no_swarm", value_parser = clap::builder::NonEmptyStringValueParser::new())]
     pub swarm: Option<String>,
+
+    /// Clear any previously saved swarm and revert capture to agent-private.
+    #[arg(long)]
+    pub no_swarm: bool,
 
     /// Limit to specific coding CLI platforms (repeatable).
     /// If omitted, all detected CLIs are configured.
@@ -118,6 +121,11 @@ pub struct SetupArgs {
     /// courier SSE is unavailable.
     #[arg(long)]
     pub poll_interval: Option<u64>,
+
+    /// Daemon log level persisted into agent config. `RUST_LOG` still wins
+    /// when set for one-off diagnostics.
+    #[arg(long, value_parser = ["error", "warn", "info", "debug", "trace"])]
+    pub log_level: Option<String>,
 
     /// Disable Dynamic Client Registration on the daemon's
     /// `/oauth/register` endpoint. By default the daemon accepts
@@ -230,6 +238,9 @@ pub async fn run(args: SetupArgs, ctx: &CliContext) -> Result<()> {
     if let Some(ref swarm) = args.swarm {
         cmd.arg("--swarm").arg(swarm);
     }
+    if args.no_swarm {
+        cmd.arg("--no-swarm");
+    }
 
     for p in &args.platform {
         cmd.arg("--platform").arg(p);
@@ -324,6 +335,9 @@ pub async fn run(args: SetupArgs, ctx: &CliContext) -> Result<()> {
     }
     if let Some(pi) = args.poll_interval.or_else(|| legacy.and_then(|c| c.poll_interval)) {
         cmd.arg("--poll-interval").arg(pi.to_string());
+    }
+    if let Some(level) = args.log_level.as_deref() {
+        cmd.arg("--log-level").arg(level);
     }
     if args.no_oauth_dcr {
         cmd.arg("--no-oauth-dcr");

@@ -21,6 +21,10 @@ pub trait KeychainBackend: Send + Sync {
     fn save(&self, account: &str, value: &str) -> Result<()>;
     fn delete(&self, account: &str) -> Result<()>;
 
+    fn display_label(&self) -> String {
+        "OS keychain".to_string()
+    }
+
     /// Filesystem root if this backend persists to disk; `None` for
     /// non-fs backends (the OS keychain has no path concept).
     /// Subprocess spawners that need the spawned binary to use the
@@ -114,6 +118,10 @@ impl KeychainBackend for FileKeychain {
     fn fs_root(&self) -> Option<&std::path::Path> {
         Some(&self.dir)
     }
+
+    fn display_label(&self) -> String {
+        format!("file keychain at {}", self.dir.display())
+    }
 }
 
 // ── Helpers for secret structs ────────────────────────────────────────
@@ -193,5 +201,15 @@ mod tests {
         assert!(kc.load("test/one").unwrap().is_none());
 
         kc.delete("test/nonexistent").unwrap();
+    }
+
+    #[test]
+    fn display_labels_name_the_backend() {
+        let dir = tempfile::tempdir().unwrap();
+        let os = OsKeychain;
+        let file = FileKeychain::new(dir.path().to_path_buf());
+
+        assert_eq!(os.display_label(), "OS keychain");
+        assert_eq!(file.display_label(), format!("file keychain at {}", dir.path().display()),);
     }
 }

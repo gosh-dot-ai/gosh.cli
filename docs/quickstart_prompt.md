@@ -186,8 +186,20 @@ there.
 ### Q3 — LLM backend (only if Q2 ≠ 3)
 
 Anthropic API (default), Groq, OpenAI, Google, or a local CLI backend
-(`claude-code`, `codex-cli`, `gemini-cli` running as a subprocess).
-The choice determines which API key to provision in the secrets step.
+(`claude`, `codex`, `gemini`, or a wrapper running as a subprocess).
+API backends determine which inference API key to provision in the secrets
+step. The local CLI backend uses the selected coding CLI's normal local login
+or environment and still needs OpenAI configured for memory embeddings and
+extraction.
+
+If the user picks local CLI, ask one follow-up:
+
+1. **Claude Code** — use a locally installed/authenticated `claude`.
+2. **Codex CLI** — use a locally installed/authenticated `codex`.
+3. **Gemini CLI** — use a locally installed/authenticated `gemini`.
+
+State the trade-off before proceeding: local CLI execution is prompt-to-stdout
+only, so MCP tool calls are not available inside that agent execution step.
 
 ### Confirm and proceed
 
@@ -344,16 +356,19 @@ gosh memory config set --key <namespace> '<json-config>'
 > request hits OpenAI's endpoint. Always use the explicit prefix
 > for non-OpenAI providers.
 
-You'll therefore push two secrets — embeddings always need
-`openai` (OpenAI hosts the embedding models), inference/extraction
-needs whichever provider Q3 picked:
+You'll therefore push two secrets for API-backed inference — embeddings always
+need `openai` (OpenAI hosts the embedding models), inference/extraction needs
+whichever provider Q3 picked:
 
 ```
 gosh memory secret set-from-env OPENAI_API_KEY  --name openai      --key <namespace>
 gosh memory secret set-from-env <Q3_KEY>        --name <q3-label>  --key <namespace>
 ```
 
-Skip the second call if Q3 = OpenAI (one secret covers everything).
+Skip the second call if Q3 = OpenAI (one secret covers everything). If Q3 =
+local CLI, keep the OpenAI secret for embeddings/extraction and do not store a
+provider key for agent execution; the local coding CLI must already be logged in
+or receive its provider key through the agent daemon environment.
 
 Minimal config JSON. Below is a **Q3 = Anthropic** example; substitute
 the `inference`/`extraction` profile blocks per the prefix table for
@@ -409,6 +424,35 @@ blocks identically):**
 | Groq | `qwen/qwen3-32b` (or any `groq/`/`meta-llama/`-prefixed model Groq serves) | `groq` | `groq` |
 | OpenAI | `gpt-4o-mini` (bare is fine for OpenAI) | `openai` | `openai` |
 | Google | `google/gemini-1.5-flash` | `google` | `google` |
+
+For Q3 = local CLI, keep `extraction` on OpenAI and point the inference profile
+at a local subprocess:
+
+```json
+{
+  "schema_version": 1,
+  "embedding_model": "text-embedding-3-large",
+  "embedding_secret_ref": {"name": "openai", "scope": "system-wide"},
+  "inference_secret_ref": {"name": "openai", "scope": "system-wide"},
+  "librarian_profile": "extraction",
+  "profile_configs": {
+    "extraction": {
+      "model": "gpt-4o-mini",
+      "secret_ref": {"name": "openai", "scope": "system-wide"}
+    },
+    "local_exec": {
+      "backend": "local_cli"
+    }
+  },
+  "profiles": {"1": "local_exec", "2": "local_exec", "3": "local_exec"}
+}
+```
+
+Do not put host-local binary paths or command arguments into memory config.
+`gosh-agent` resolves the local execution command on the agent host. If the user
+picked a specific CLI, set `GOSH_LOCAL_CLI_BACKEND=claude|codex|gemini` in the
+agent daemon environment; otherwise the agent detects the first supported CLI on
+`PATH`.
 
 Pricing values: copy the per-1k cost the provider publishes for that
 specific model. Memory uses these for budget accounting only —
@@ -553,6 +597,9 @@ Capture scope: swarm-shared (swarm: <swarm-name>)
 ```
 If it says `agent-private`, you forgot `--swarm` — re-run with the
 swarm flag to share facts cross-agent.
+Later setup runs preserve the saved `--key` / `--swarm` when those flags
+are omitted. Use `gosh agent setup --no-swarm` only when you explicitly
+want to revert capture to agent-private.
 
 For Claude Code with the default project scope: launch `claude` once
 from this directory and accept the "Trust this MCP server?" prompt.
@@ -590,6 +637,10 @@ can't drain a real budget.
 Setup writes these into `GlobalConfig` and the autostart-relaunched
 daemon picks them up. To turn watching back off later: re-run
 `gosh agent setup --no-watch`.
+
+For daemon verbosity, use `gosh agent setup --log-level <error|warn|info|debug|trace>`.
+`info` is the normal operator level and includes HTTP access logs; `RUST_LOG`
+still overrides this for one-off diagnostics.
 
 #### Daemon lifecycle
 
@@ -802,8 +853,8 @@ If the marker isn't found, do not retry blindly. Diagnose:
      with `INVALID_BUDGET`.
    - Some subcommands use `--swarm`, others `--swarm-id` — check
      `--help`.
-3. Inspect: `gosh agent task status <task-id> --key <k>`.
-4. List the queue: `gosh agent task list --key <k>` to see whether the
+3. Inspect: `gosh agent task status <task-id> --key <k> --swarm-id <s>`.
+4. List the queue: `gosh agent task list --key <k> --swarm-id <s>` to see whether the
    task ever surfaced to the daemon (if it's missing here, the daemon
    isn't watching the right `--watch-key`/`--watch-swarm-id`).
 
